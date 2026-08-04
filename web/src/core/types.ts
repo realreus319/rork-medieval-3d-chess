@@ -5,7 +5,11 @@
 
 export type Faction = "w" | "b";
 
-export type PieceKind = "p" | "n" | "b" | "r" | "q" | "k";
+/**
+ * `e` is the Xiangqi elephant/minister visual archetype. It is intentionally a
+ * render-only role: the Xiangqi rules continue to use `PieceType = elephant`.
+ */
+export type PieceKind = "p" | "n" | "b" | "e" | "r" | "q" | "k";
 
 export type SquareId = string;
 
@@ -98,7 +102,7 @@ export interface GameSnapshot {
   /** Full move ledger in standard notation, oldest first. */
   moves: LedgerMove[];
   captured: CapturedPiece[];
-  /** Positive = white is ahead by that many pawns. */
+  /** Positive = white/red is ahead by that many pawns. */
   materialDiff: number;
   lastMove: { from: SquareId; to: SquareId } | null;
   clock: ClockState;
@@ -118,9 +122,9 @@ export interface MoveEvent {
   from: SquareId;
   to: SquareId;
   san: string;
-  /** Set when a piece leaves the board (normal capture or en passant). */
+  /** Set when a piece leaves the board. */
   capture: { square: SquareId; kind: PieceKind; color: Faction } | null;
-  /** Set for castling — the rook's own trip. */
+  /** Kept for compatibility with the original western-chess renderer. */
   rook: { from: SquareId; to: SquareId } | null;
   promotion: PieceKind | null;
   isCheck: boolean;
@@ -132,17 +136,19 @@ export type Animator = (event: MoveEvent) => Promise<void>;
 export const PIECE_VALUE: Record<PieceKind, number> = {
   p: 1,
   n: 3,
-  b: 3,
+  b: 2,
+  e: 2,
   r: 5,
-  q: 9,
+  q: 5,
   k: 0,
 };
 
 export const PIECE_LABEL: Record<PieceKind, string> = {
-  p: "Pawn",
-  n: "Knight",
-  b: "Bishop",
-  r: "Rook",
-  q: "Queen",
-  k: "King",
+  p: "Soldier",
+  n: "Horse",
+  b: "Advisor",
+  e: "Elephant",
+  r: "Chariot",
+  q: "Cannon",
+  k: "General",
 };
