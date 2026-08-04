@@ -1,3 +1,4 @@
+import "./xiangqi/elephantVisualPatch";
 import { GameShell } from "./ui/GameShell";
 
 export default function App() {
