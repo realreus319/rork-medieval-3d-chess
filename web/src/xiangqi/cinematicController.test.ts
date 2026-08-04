@@ -1,17 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
+import "./elephantVisualPatch";
 import { CinematicXiangqiController } from "./cinematicController";
 
 describe("CinematicXiangqiController", () => {
-  it("exposes the 9×10 Xiangqi position through original cinematic archetypes", () => {
+  it("exposes the 9×10 Xiangqi position through cinematic archetypes", () => {
     const controller = new CinematicXiangqiController();
     controller.start({ mode: "local", difficulty: 2, humanColor: "red" });
 
     expect(controller.getBoard()).toHaveLength(32);
-    expect(controller.pieceAt("e10")).toEqual({ kind: "k", color: "w" });
-    expect(controller.pieceAt("b8")).toEqual({ kind: "q", color: "w" });
-    expect(controller.pieceAt("a7")).toEqual({ kind: "p", color: "w" });
-    expect(controller.legalTargets("a7")).toContainEqual({
-      to: "a6",
+    expect(controller.pieceAt("e1")).toEqual({ kind: "k", color: "w" });
+    expect(controller.pieceAt("b3")).toEqual({ kind: "q", color: "w" });
+    expect(controller.pieceAt("c1")).toEqual({ kind: "e", color: "w" });
+    expect(controller.pieceAt("a4")).toEqual({ kind: "p", color: "w" });
+    expect(controller.legalTargets("a4")).toContainEqual({
+      to: "a5",
       capture: false,
       castle: false,
       promotion: false,
@@ -26,16 +28,16 @@ describe("CinematicXiangqiController", () => {
     controller.setAnimator(animator);
     controller.start({ mode: "local", difficulty: 2, humanColor: "red" });
 
-    await expect(controller.tryMove("a7", "a6")).resolves.toBe(true);
+    await expect(controller.tryMove("a4", "a5")).resolves.toBe(true);
     expect(animator).toHaveBeenCalledWith(expect.objectContaining({
       color: "w",
       kind: "p",
-      from: "a7",
-      to: "a6",
+      from: "a4",
+      to: "a5",
       rook: null,
       promotion: null,
     }));
-    expect(controller.getSnapshot().lastMove).toEqual({ from: "a7", to: "a6" });
+    expect(controller.getSnapshot().lastMove).toEqual({ from: "a4", to: "a5" });
     expect(controller.getSnapshot().turn).toBe("b");
 
     controller.dispose();
