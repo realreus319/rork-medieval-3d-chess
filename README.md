@@ -11,6 +11,8 @@
 - 三维木质棋盘、程序化立体棋子、中文棋面、合法落点与吃子提示
 - 旋转、缩放、翻转、俯视镜头以及移动、吃子动画
 - 本地双人、人机对弈、三级搜索深度、Web Worker AI
+- 人机模式可选择执红先行或执黑后行，镜头与 AI 回合自动适配
+- 中文、英文完整界面切换，首次访问默认简体中文并记忆用户选择
 - 悔棋、重新开局、棋谱记录、已吃棋子展示、响应式布局
 
 ## 开发
@@ -20,7 +22,7 @@ cd web
 npm install
 npm run dev
 npm run build
-npx vitest run src/xiangqi/core.test.ts
+npx vitest run src/xiangqi/core.test.ts src/xiangqi/i18n.test.ts
 ```
 
 要求 Node.js 20+。项目为纯静态站点，无需后端或环境变量。
@@ -31,6 +33,8 @@ npx vitest run src/xiangqi/core.test.ts
 web/src/xiangqi/
 ├── core.ts            中国象棋状态、走法、将军与终局判定
 ├── core.test.ts       核心规则测试
+├── i18n.ts            中英双语界面文案与语言偏好
+├── i18n.test.ts       默认语言与翻译完整性测试
 ├── ai.ts              估值、走法排序与 Alpha-Beta 搜索
 ├── aiClient.ts        主线程 AI 客户端
 ├── xiangqi.worker.ts  Web Worker 搜索入口
