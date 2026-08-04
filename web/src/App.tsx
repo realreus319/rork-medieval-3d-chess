@@ -10,41 +10,26 @@ import {
   Undo2,
   Users,
 } from "lucide-react";
-import { XiangqiAiClient } from "./xiangqi/aiClient";
+
+import { audio } from "./audio/audioManager";
+import type { GameController } from "./core/gameController";
+import type { GameSnapshot } from "./core/types";
+import { DEFAULT_ARENA } from "./scene/arena";
+import { detectQualityPreset } from "./scene/quality";
+import { SceneEngine } from "./scene/sceneEngine";
+import { PIECE_LABELS, createInitialState, type Color, type GameState } from "./xiangqi/core";
 import {
-  PIECE_LABELS,
-  cloneState,
-  createInitialState,
-  legalMovesForPiece,
-  pieceAt,
-  playMove,
-  type Color,
-  type GameState,
-  type Move,
-  type PieceType,
-  type Position,
-} from "./xiangqi/core";
-import {
-  UI_COPY,
-  readStoredLocale,
-  storeLocale,
-  type Locale,
-  type UiCopy,
-} from "./xiangqi/i18n";
-import { XiangqiScene } from "./xiangqi/scene";
+  CinematicXiangqiController,
+  type CinematicDifficulty,
+  type CinematicLedgerEntry,
+  type CinematicMode,
+} from "./xiangqi/cinematicController";
+import { UI_COPY, readStoredLocale, storeLocale, type Locale, type UiCopy } from "./xiangqi/i18n";
 
-type Mode = "local" | "ai";
-type Difficulty = 1 | 2 | 3;
+type Difficulty = CinematicDifficulty;
+type Mode = CinematicMode;
 
-interface LedgerEntry {
-  move: Move;
-  color: Color;
-  type: PieceType;
-}
-
-const oppositeColor = (color: Color): Color => (color === "red" ? "black" : "red");
-
-function moveText(entry: LedgerEntry, copy: UiCopy): string {
+function moveText(entry: CinematicLedgerEntry, copy: UiCopy): string {
   const { move, color, type } = entry;
   return `${copy.colorNames[color]} ${copy.pieces[color][type]} ${move.from.col + 1},${move.from.row + 1} → ${move.to.col + 1},${move.to.row + 1}`;
 }
@@ -54,92 +39,36 @@ function updateMeta(selector: string, value: string): void {
 }
 
 export default function App() {
-  const sceneHost = useRef<HTMLDivElement>(null);
-  const sceneRef = useRef<XiangqiScene | null>(null);
-  const perspectiveRef = useRef<Color>("red");
-  const aiRef = useRef<XiangqiAiClient | null>(null);
-  const stateRef = useRef<GameState>(createInitialState());
-  const handleCellRef = useRef<(position: Position) => void>(() => undefined);
-  const [state, setState] = useState(stateRef.current);
-  const [history, setHistory] = useState<GameState[]>([]);
-  const [ledger, setLedger] = useState<LedgerEntry[]>([]);
-  const [selected, setSelected] = useState<string | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const engineRef = useRef<SceneEngine | null>(null);
+  const controller = useMemo(() => new CinematicXiangqiController(), []);
+  const quality = useMemo(() => detectQualityPreset(), []);
+
+  const [snapshot, setSnapshot] = useState<GameSnapshot>(() => controller.getSnapshot());
+  const [state, setState] = useState<GameState>(() => controller.getGameState());
+  const [ledger, setLedger] = useState<CinematicLedgerEntry[]>(() => controller.getLedger());
   const [mode, setMode] = useState<Mode>("ai");
   const [humanColor, setHumanColor] = useState<Color>("red");
   const [difficulty, setDifficulty] = useState<Difficulty>(2);
-  const [thinking, setThinking] = useState(false);
   const [locale, setLocale] = useState<Locale>(readStoredLocale);
+  const localeRef = useRef<Locale>(locale);
+  const [ready, setReady] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [unsupported, setUnsupported] = useState(false);
 
   const copy = UI_COPY[locale];
-  const aiColor = oppositeColor(humanColor);
 
-  const legalMoves = useMemo(
-    () => (selected ? legalMovesForPiece(state, selected) : []),
-    [selected, state],
-  );
+  const syncFromController = useCallback(() => {
+    setSnapshot(controller.getSnapshot());
+    setState(controller.getGameState());
+    setLedger(controller.getLedger());
+  }, [controller]);
 
-  const commitMove = useCallback((move: Move) => {
-    const current = stateRef.current;
-    const next = playMove(current, move);
-    if (next === current) return false;
-    const actualMove = next.lastMove ?? move;
-    const piece = current.pieces.find((item) => item.id === actualMove.pieceId);
-    if (!piece) return false;
-    setHistory((items) => [...items, cloneState(current)]);
-    setLedger((items) => [...items, { move: actualMove, color: piece.color, type: piece.type }]);
-    stateRef.current = next;
-    setState(next);
-    setSelected(null);
-    return true;
-  }, []);
-
-  const handleCell = useCallback(
-    (position: Position) => {
-      const current = stateRef.current;
-      if (thinking || current.winner || (mode === "ai" && current.turn === aiColor)) return;
-      if (selected) {
-        const move = legalMovesForPiece(current, selected).find(
-          (candidate) => candidate.to.row === position.row && candidate.to.col === position.col,
-        );
-        if (move && commitMove(move)) return;
-      }
-      const piece = pieceAt(current, position);
-      setSelected(piece?.color === current.turn ? piece.id : null);
-    },
-    [aiColor, commitMove, mode, selected, thinking],
-  );
-
-  handleCellRef.current = handleCell;
+  useEffect(() => controller.on("state", syncFromController), [controller, syncFromController]);
 
   useEffect(() => {
-    if (!sceneHost.current) return;
-    const scene = new XiangqiScene(sceneHost.current, (position) => handleCellRef.current(position));
-    sceneRef.current = scene;
-    scene.update(stateRef.current, null, []);
-    return () => {
-      scene.dispose();
-      sceneRef.current = null;
-    };
-  }, []);
-
-  useEffect(() => {
-    sceneRef.current?.update(state, selected, legalMoves);
-  }, [state, selected, legalMoves]);
-
-  useEffect(() => {
-    const targetPerspective = mode === "ai" ? humanColor : "red";
-    if (perspectiveRef.current !== targetPerspective) {
-      sceneRef.current?.flip();
-      perspectiveRef.current = targetPerspective;
-    }
-  }, [humanColor, mode]);
-
-  useEffect(() => {
-    aiRef.current = new XiangqiAiClient();
-    return () => aiRef.current?.dispose();
-  }, []);
-
-  useEffect(() => {
+    localeRef.current = locale;
     storeLocale(locale);
     document.documentElement.lang = locale;
     document.title = copy.documentTitle;
@@ -149,77 +78,107 @@ export default function App() {
   }, [copy, locale]);
 
   useEffect(() => {
-    if (mode !== "ai" || state.turn !== aiColor || state.winner) return;
-    const client = aiRef.current;
-    if (!client) return;
-    let cancelled = false;
-    setThinking(true);
-    const timer = window.setTimeout(async () => {
-      const move = await client.choose(state, difficulty);
-      if (!cancelled && move) commitMove(move);
-      if (!cancelled) setThinking(false);
-    }, 360);
+    const unlock = () => void audio.unlock();
+    window.addEventListener("pointerdown", unlock, { once: true });
+    window.addEventListener("keydown", unlock, { once: true });
     return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
     };
-  }, [aiColor, commitMove, difficulty, mode, state]);
-
-  const reset = useCallback(() => {
-    aiRef.current?.cancel();
-    const fresh = createInitialState();
-    stateRef.current = fresh;
-    setState(fresh);
-    setSelected(null);
-    setHistory([]);
-    setLedger([]);
-    setThinking(false);
   }, []);
 
-  const undo = useCallback(() => {
-    aiRef.current?.cancel();
-    setHistory((items) => {
-      if (items.length === 0) return items;
-      let targetIndex = items.length - 1;
-      if (mode === "ai" && stateRef.current.turn === humanColor && items.length >= 2) {
-        targetIndex = items.length - 2;
-      }
-      const previous = cloneState(items[targetIndex]);
-      stateRef.current = previous;
-      setState(previous);
-      setSelected(null);
-      setLedger((moves) => moves.slice(0, targetIndex));
-      setThinking(false);
-      return items.slice(0, targetIndex);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const probe = document.createElement("canvas");
+    if (!probe.getContext("webgl2") && !probe.getContext("webgl")) {
+      setUnsupported(true);
+      return;
+    }
+
+    let disposed = false;
+    let engine: SceneEngine;
+    try {
+      engine = new SceneEngine(
+        canvas,
+        controller as unknown as GameController,
+        {
+          onLoadProgress: setProgress,
+          onReady: () => setProgress(1),
+          onPromotionOpen: () => undefined,
+          onQualityAdjusted: (preset) => {
+            setNotice(localeRef.current === "zh-CN" ? `为保持流畅，画质已调整为 ${preset}` : `Graphics adjusted to ${preset}`);
+            window.setTimeout(() => setNotice(null), 4500);
+          },
+          onFps: () => undefined,
+          onContextLost: () => setNotice(localeRef.current === "zh-CN" ? "图形上下文已丢失，请刷新页面" : "Graphics context lost. Reload the page."),
+          onCameraFlipped: () => undefined,
+          onTacticalView: () => undefined,
+          onRenderFallback: (message) => {
+            setNotice(message);
+            window.setTimeout(() => setNotice(null), 7000);
+          },
+        },
+        quality,
+        DEFAULT_ARENA,
+      );
+    } catch (error) {
+      console.error("[xiangqi] could not start cinematic renderer", error);
+      setUnsupported(true);
+      return;
+    }
+
+    engineRef.current = engine;
+    engine.setInteractive(false);
+    engine.setCaptureCinematics(true);
+    engine.setRankBadges(true);
+    engine.start();
+
+    void engine.load().then(async () => {
+      if (disposed) return;
+      await engine.playIntro();
+      if (disposed) return;
+      engine.setInteractive(true);
+      setReady(true);
+    }).catch((error) => {
+      console.error("[xiangqi] could not load cinematic assets", error);
+      if (!disposed) setUnsupported(true);
     });
-  }, [humanColor, mode]);
 
-  const changeMode = useCallback((nextMode: Mode) => {
-    if (nextMode === mode) return;
-    setMode(nextMode);
-    reset();
-  }, [mode, reset]);
+    return () => {
+      disposed = true;
+      engineRef.current = null;
+      engine.dispose();
+    };
+  }, [controller, quality]);
 
-  const changeHumanColor = useCallback((color: Color) => {
-    if (color === humanColor) return;
-    setHumanColor(color);
-    reset();
-  }, [humanColor, reset]);
+  useEffect(() => {
+    if (!ready) return;
+    controller.start({ mode, difficulty, humanColor });
+    engineRef.current?.setCameraPreset(humanColor === "red" ? "white" : "black");
+  }, [controller, difficulty, humanColor, mode, ready]);
+
+  useEffect(() => () => controller.dispose(), [controller]);
+
+  const reset = useCallback(() => {
+    controller.start({ mode, difficulty, humanColor });
+    engineRef.current?.setCameraPreset(humanColor === "red" ? "white" : "black");
+  }, [controller, difficulty, humanColor, mode]);
+
+  const undo = useCallback(() => {
+    if (controller.undo()) engineRef.current?.resync();
+  }, [controller]);
 
   const toggleLocale = useCallback(() => {
     setLocale((current) => (current === "zh-CN" ? "en-US" : "zh-CN"));
   }, []);
 
-  const flipBoard = useCallback(() => {
-    sceneRef.current?.flip();
-    perspectiveRef.current = oppositeColor(perspectiveRef.current);
-  }, []);
-
   const currentColorName = copy.colorNames[state.turn];
   const status = state.winner
     ? copy.status.winner(copy.colorNames[state.winner])
-    : thinking
-      ? copy.status.thinking(copy.colorNames[aiColor])
+    : snapshot.thinking
+      ? copy.status.thinking(copy.colorNames[state.turn])
       : state.check
         ? copy.status.checked(currentColorName)
         : copy.status.turn(currentColorName);
@@ -229,9 +188,20 @@ export default function App() {
     return createInitialState().pieces.filter((piece) => !ids.has(piece.id));
   }, [state.pieces]);
 
+  if (unsupported) {
+    return (
+      <main className="unsupported-screen">
+        <div className="glass-panel">
+          <h1>{locale === "zh-CN" ? "无法启动 3D 场景" : "3D scene unavailable"}</h1>
+          <p>{locale === "zh-CN" ? "当前浏览器或显卡未提供 WebGL，请开启硬件加速后重试。" : "WebGL is unavailable. Enable hardware acceleration and try again."}</p>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className="app-shell">
-      <div className="scene" ref={sceneHost} />
+      <canvas className="scene" ref={canvasRef} />
       <div className="vignette" />
 
       <header className="topbar glass-panel">
@@ -244,28 +214,23 @@ export default function App() {
         </div>
         <div className={`turn-indicator ${state.turn}`}>
           <Swords size={18} />
-          <span>{status}</span>
+          <span>{ready ? status : locale === "zh-CN" ? "正在集结军阵" : "Assembling the armies"}</span>
         </div>
         <div className="toolbar">
-          <button
-            className="language-toggle"
-            onClick={toggleLocale}
-            aria-label={copy.switchLanguage}
-            title={copy.switchLanguage}
-          >
+          <button className="language-toggle" onClick={toggleLocale} aria-label={copy.switchLanguage} title={copy.switchLanguage}>
             <Languages size={17} />
             <span>{locale === "zh-CN" ? "EN" : "中"}</span>
           </button>
-          <button onClick={undo} disabled={history.length === 0 || thinking} aria-label={copy.toolbar.undo} title={copy.toolbar.undo}>
+          <button onClick={undo} disabled={!snapshot.canUndo} aria-label={copy.toolbar.undo} title={copy.toolbar.undo}>
             <Undo2 size={18} />
           </button>
-          <button onClick={flipBoard} aria-label={copy.toolbar.flip} title={copy.toolbar.flip}>
+          <button onClick={() => engineRef.current?.flipCamera()} aria-label={copy.toolbar.flip} title={copy.toolbar.flip}>
             <FlipVertical2 size={18} />
           </button>
-          <button onClick={() => sceneRef.current?.overhead()} aria-label={copy.toolbar.overhead} title={copy.toolbar.overhead}>
+          <button onClick={() => engineRef.current?.setCameraPreset("top")} aria-label={copy.toolbar.overhead} title={copy.toolbar.overhead}>
             <Camera size={18} />
           </button>
-          <button onClick={reset} aria-label={copy.toolbar.restart} title={copy.toolbar.restart}>
+          <button onClick={reset} disabled={!ready} aria-label={copy.toolbar.restart} title={copy.toolbar.restart}>
             <RotateCcw size={18} />
           </button>
         </div>
@@ -277,10 +242,10 @@ export default function App() {
           <small>{copy.round(Math.ceil(state.moveNumber / 2))}</small>
         </div>
         <div className="mode-switch">
-          <button className={mode === "ai" ? "active" : ""} onClick={() => changeMode("ai")}>
+          <button className={mode === "ai" ? "active" : ""} onClick={() => setMode("ai")} disabled={!ready}>
             <Bot size={17} /> {copy.modes.ai}
           </button>
-          <button className={mode === "local" ? "active" : ""} onClick={() => changeMode("local")}>
+          <button className={mode === "local" ? "active" : ""} onClick={() => setMode("local")} disabled={!ready}>
             <Users size={17} /> {copy.modes.local}
           </button>
         </div>
@@ -293,7 +258,8 @@ export default function App() {
                   <button
                     key={color}
                     className={`${color} ${humanColor === color ? "active" : ""}`}
-                    onClick={() => changeHumanColor(color)}
+                    onClick={() => setHumanColor(color)}
+                    disabled={!ready}
                   >
                     <b>{color === "red" ? "帅" : "将"}</b>
                     <span>{copy.sides[color]}</span>
@@ -305,7 +271,7 @@ export default function App() {
               <span>{copy.difficultyLabel}</span>
               <div>
                 {([1, 2, 3] as Difficulty[]).map((level) => (
-                  <button key={level} className={difficulty === level ? "active" : ""} onClick={() => setDifficulty(level)}>
+                  <button key={level} className={difficulty === level ? "active" : ""} onClick={() => setDifficulty(level)} disabled={!ready}>
                     {copy.difficulties[level]}
                   </button>
                 ))}
@@ -313,9 +279,9 @@ export default function App() {
             </div>
           </>
         )}
-        <div className="rule-note">
-          <strong>{copy.rulesTitle}</strong>
-          <span>{copy.rulesSummary}</span>
+        <div className="rule-note cinematic-note">
+          <strong>{locale === "zh-CN" ? "原版电影化战斗已恢复" : "Original cinematic combat restored"}</strong>
+          <span>{locale === "zh-CN" ? "3D 角色 · 行军动画 · 近战攻击 · 远程法术 · 受击死亡 · 消散特效" : "3D characters · marching · melee · spells · death · dissolve effects"}</span>
         </div>
       </aside>
 
@@ -349,6 +315,17 @@ export default function App() {
       </aside>
 
       <footer className="hint">{copy.hint}</footer>
+
+      {!ready && (
+        <div className="loading-screen">
+          <div className="loading-seal">将</div>
+          <strong>{locale === "zh-CN" ? "正在加载原版角色与战斗动画" : "Loading original characters and combat animations"}</strong>
+          <div className="loading-track"><span style={{ width: `${Math.round(progress * 100)}%` }} /></div>
+          <small>{Math.round(progress * 100)}%</small>
+        </div>
+      )}
+
+      {notice && <div className="notice glass-panel">{notice}</div>}
 
       {state.winner && (
         <div className="game-over">
