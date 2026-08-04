@@ -2,7 +2,14 @@
 import { chooseMove } from "./ai";
 import type { GameState } from "./core";
 
-self.onmessage = (event: MessageEvent<{ state: GameState; depth: number }>) => {
-  const move = chooseMove(event.data.state, event.data.depth);
-  self.postMessage(move);
+interface SearchRequest {
+  request: number;
+  state: GameState;
+  depth: number;
+}
+
+self.onmessage = (event: MessageEvent<SearchRequest>) => {
+  const { request, state, depth } = event.data;
+  const move = chooseMove(state, depth);
+  self.postMessage({ request, move });
 };
