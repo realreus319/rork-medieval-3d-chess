@@ -1,4 +1,4 @@
-name: Trigger Xiangqi Refactor
+name: Verify Xiangqi GameShell
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 jobs:
-  patch-test-build:
+  verify-feature-branch:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,31 +18,43 @@ jobs:
           ref: feat/xiangqi-gameshell-elephant-rules
           fetch-depth: 0
 
-      - name: Apply rendering patch
-        run: python3 scripts/patch_xiangqi.py
-
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
           cache-dependency-path: web/package-lock.json
 
-      - name: Install dependencies
-        working-directory: web
-        run: npm ci
-
-      - name: Run Xiangqi tests
-        working-directory: web
-        run: npx vitest run src/xiangqi/core.test.ts src/xiangqi/coordinates.test.ts src/xiangqi/cinematicController.test.ts src/xiangqi/i18n.test.ts src/xiangqi/aiClient.test.ts
-
-      - name: Production build
-        working-directory: web
-        run: npm run build
-
-      - name: Commit verified result
+      - name: Install, test and build
+        shell: bash
         run: |
+          set +e
+          mkdir -p .ci
+          cd web
+          npm ci 2>&1 | tee ../.ci/npm-ci.log
+          install_status=${PIPESTATUS[0]}
+          test_status=99
+          build_status=99
+          if [ "$install_status" -eq 0 ]; then
+            npx vitest run src/xiangqi/core.test.ts src/xiangqi/coordinates.test.ts src/xiangqi/cinematicController.test.ts src/xiangqi/i18n.test.ts src/xiangqi/aiClient.test.ts 2>&1 | tee ../.ci/tests.log
+            test_status=${PIPESTATUS[0]}
+            npm run build 2>&1 | tee ../.ci/build.log
+            build_status=${PIPESTATUS[0]}
+          fi
+          cd ..
+          result=success
+          if [ "$install_status" -ne 0 ] || [ "$test_status" -ne 0 ] || [ "$build_status" -ne 0 ]; then result=failure; fi
+          cat > .ci/xiangqi-verification.json <<EOF
+          {
+            "result": "$result",
+            "install": $install_status,
+            "tests": $test_status,
+            "build": $build_status,
+            "commit": "$(git rev-parse HEAD)"
+          }
+          EOF
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add web/src
-          git commit -m "feat: add distinct elephant visuals and verify Xiangqi rules" || true
+          git add .ci
+          git commit -m "ci: record Xiangqi GameShell verification ($result)" || true
           git push origin HEAD:feat/xiangqi-gameshell-elephant-rules
+          if [ "$result" != success ]; then exit 1; fi
