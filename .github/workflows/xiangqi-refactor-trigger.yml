@@ -1,16 +1,16 @@
 name: Trigger Xiangqi Refactor
 
 on:
-  issues:
-    types: [opened]
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/xiangqi-refactor-trigger.yml
 
 permissions:
   contents: write
-  issues: write
 
 jobs:
   patch-test-build:
-    if: github.event.issue.title == '[CI] Run Xiangqi GameShell refactor'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -46,9 +46,3 @@ jobs:
           git add web/src
           git commit -m "feat: add distinct elephant visuals and verify Xiangqi rules" || true
           git push origin HEAD:feat/xiangqi-gameshell-elephant-rules
-
-      - name: Close trigger issue
-        if: success()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh issue close ${{ github.event.issue.number }} --reason completed --comment "GameShell、相象独立表现和中国象棋规则测试已通过，补丁已回写功能分支。"
