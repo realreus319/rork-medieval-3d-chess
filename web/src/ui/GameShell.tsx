@@ -6,8 +6,7 @@ import type { GameSnapshot, LedgerMove } from "../core/types";
 import { ARENA_LOOKS, DEFAULT_ARENA, type ArenaTheme } from "../scene/arena";
 import { detectQualityPreset, type QualityPreset } from "../scene/quality";
 import { SceneEngine, type CameraPreset } from "../scene/sceneEngine";
-import type { Color } from "../xiangqi/core";
-import { CinematicXiangqiController, type CinematicDifficulty } from "../xiangqi/cinematicController";
+import { CinematicXiangqiController } from "../xiangqi/cinematicController";
 import { UI_COPY, readStoredLocale, storeLocale, type Locale } from "../xiangqi/i18n";
 import { GameOverModal } from "./GameOverModal";
 import { Hud } from "./Hud";
@@ -59,10 +58,6 @@ function updateMeta(selector: string, value: string): void {
   document.querySelector<HTMLMetaElement>(selector)?.setAttribute("content", value);
 }
 
-function difficultyNumber(value: GameSnapshot["difficulty"]): CinematicDifficulty {
-  return value === "easy" ? 1 : value === "hard" ? 3 : 2;
-}
-
 export function GameShell() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const engineRef = useRef<SceneEngine | null>(null);
@@ -77,6 +72,7 @@ export function GameShell() {
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState<GameSettings>(initialSettings);
   const [locale, setLocale] = useState<Locale>(readStoredLocale);
+  const localeRef = useRef<Locale>(locale);
   const [gpu, setGpu] = useState("");
   const [fps, setFps] = useState(0);
   const [unsupported, setUnsupported] = useState(false);
@@ -90,6 +86,7 @@ export function GameShell() {
   useEffect(() => () => controller.dispose(), [controller]);
 
   useEffect(() => {
+    localeRef.current = locale;
     const copy = UI_COPY[locale];
     storeLocale(locale);
     document.documentElement.lang = locale;
@@ -130,7 +127,7 @@ export function GameShell() {
           onPromotionOpen: () => undefined,
           onQualityAdjusted: (quality) => {
             setSettings((current) => ({ ...current, quality }));
-            setNotice(locale === "zh-CN" ? `为保持流畅，画质已自动调整为 ${quality}` : `Graphics adjusted to ${quality}`);
+            setNotice(localeRef.current === "zh-CN" ? `为保持流畅，画质已自动调整为 ${quality}` : `Graphics adjusted to ${quality}`);
             window.setTimeout(() => setNotice(null), 5000);
           },
           onFps: setFps,
@@ -176,7 +173,7 @@ export function GameShell() {
       engineRef.current = null;
       engine.dispose();
     };
-  }, [controller, detected, initialSettings, locale]);
+  }, [controller, detected, initialSettings]);
 
   useEffect(() => {
     const engine = engineRef.current;
