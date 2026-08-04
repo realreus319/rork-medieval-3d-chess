@@ -1,43 +1,45 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import { audio } from "../audio/audioManager";
-import { GameController } from "../core/gameController";
-import type { LedgerMove } from "../core/types";
-import { Clapperboard } from "lucide-react";
+import type { GameController } from "../core/gameController";
+import type { GameSnapshot, LedgerMove } from "../core/types";
 import { ARENA_LOOKS, DEFAULT_ARENA, type ArenaTheme } from "../scene/arena";
 import { detectQualityPreset, type QualityPreset } from "../scene/quality";
-import { SceneEngine, type CameraPreset, type ShowcaseCamera } from "../scene/sceneEngine";
+import { SceneEngine, type CameraPreset } from "../scene/sceneEngine";
+import type { Color } from "../xiangqi/core";
+import { CinematicXiangqiController, type CinematicDifficulty } from "../xiangqi/cinematicController";
+import { UI_COPY, readStoredLocale, storeLocale, type Locale } from "../xiangqi/i18n";
 import { GameOverModal } from "./GameOverModal";
 import { Hud } from "./Hud";
 import { MainMenu, type MatchConfig } from "./MainMenu";
 import { SettingsPanel, type GameSettings } from "./SettingsPanel";
-import { useGameSnapshot } from "./useGameSnapshot";
 import "./medieval.css";
 
 type Phase = "loading" | "menu" | "playing";
 
-const ATTRACT_DELAY_MS = 30_000;
-const RENDER_PREFS_KEY = "kg.render";
+const SETTINGS_KEY = "xiangqi.gameshell.settings";
 
-interface RenderPrefs {
-  safeMode: boolean;
-  brightness: number;
-}
-
-/**
- * Safe rendering and brightness are remembered across visits, and `?safe=1`
- * forces them on — a player whose driver blacks the hall out must not have to
- * find the toggle again on every reload.
- */
-function loadRenderPrefs(): RenderPrefs {
-  const fallback: RenderPrefs = { safeMode: false, brightness: 1 };
-  if (typeof window === "undefined") return fallback;
+function loadSettings(detected: QualityPreset): GameSettings {
+  const fallback: GameSettings = {
+    quality: detected,
+    arena: DEFAULT_ARENA,
+    captureCinematics: true,
+    rotateBoard: true,
+    rankBadges: true,
+    muted: false,
+    safeMode: false,
+    brightness: 1,
+  };
   try {
-    const forced = new URLSearchParams(window.location.search).has("safe");
-    const raw = window.localStorage.getItem(RENDER_PREFS_KEY);
-    const stored = raw ? (JSON.parse(raw) as Partial<RenderPrefs>) : {};
+    const raw = window.localStorage.getItem(SETTINGS_KEY);
+    const stored = raw ? (JSON.parse(raw) as Partial<GameSettings>) : {};
+    const forcedSafe = new URLSearchParams(window.location.search).has("safe");
     return {
-      safeMode: forced || stored.safeMode === true,
+      ...fallback,
+      ...stored,
+      quality: stored.quality ?? detected,
+      arena: stored.arena ?? DEFAULT_ARENA,
+      safeMode: forcedSafe || stored.safeMode === true,
       brightness: typeof stored.brightness === "number" ? Math.min(1.8, Math.max(0.6, stored.brightness)) : 1,
     };
   } catch {
@@ -45,127 +47,60 @@ function loadRenderPrefs(): RenderPrefs {
   }
 }
 
-function saveRenderPrefs(prefs: RenderPrefs): void {
+function saveSettings(settings: GameSettings): void {
   try {
-    window.localStorage.setItem(RENDER_PREFS_KEY, JSON.stringify(prefs));
+    window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
   } catch {
-    // Private browsing — the session still works, it just will not be remembered.
+    // Storage can be unavailable in privacy mode; the current session still works.
   }
+}
+
+function updateMeta(selector: string, value: string): void {
+  document.querySelector<HTMLMetaElement>(selector)?.setAttribute("content", value);
+}
+
+function difficultyNumber(value: GameSnapshot["difficulty"]): CinematicDifficulty {
+  return value === "easy" ? 1 : value === "hard" ? 3 : 2;
 }
 
 export function GameShell() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const engineRef = useRef<SceneEngine | null>(null);
-  const attractTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const controller = useMemo(() => new GameController(), []);
-  const snapshot = useGameSnapshot(controller);
-
+  const controller = useMemo(() => new CinematicXiangqiController(), []);
   const detected = useMemo<QualityPreset>(() => detectQualityPreset(), []);
-  const initialRender = useMemo<RenderPrefs>(() => loadRenderPrefs(), []);
-  const [settings, setSettings] = useState<GameSettings>(() => ({
-    quality: detected,
-    arena: DEFAULT_ARENA,
-    captureCinematics: true,
-    rotateBoard: true,
-    rankBadges: true,
-    muted: false,
-    safeMode: initialRender.safeMode,
-    brightness: initialRender.brightness,
-  }));
-  const [gpu, setGpu] = useState<string>("");
+  const initialSettings = useMemo(() => loadSettings(detected), [detected]);
 
+  const [snapshot, setSnapshot] = useState<GameSnapshot>(() => controller.getSnapshot());
   const [phase, setPhase] = useState<Phase>("loading");
   const [progress, setProgress] = useState(0);
-  const [showSettings, setShowSettings] = useState(false);
   const [introPlaying, setIntroPlaying] = useState(false);
-  const [attract, setAttract] = useState(false);
-  const [promotionOpen, setPromotionOpen] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [settings, setSettings] = useState<GameSettings>(initialSettings);
+  const [locale, setLocale] = useState<Locale>(readStoredLocale);
+  const [gpu, setGpu] = useState("");
   const [fps, setFps] = useState(0);
-  const [contextLost, setContextLost] = useState(false);
-  const [cameraFlipped, setCameraFlipped] = useState(false);
-  /** Flat overhead map: no 3D figure can hide a square. */
-  const [tactical, setTactical] = useState(false);
   const [unsupported, setUnsupported] = useState(false);
+  const [contextLost, setContextLost] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  /** Showcase recording: strips every panel so the capture is board-only. */
-  const [cinema, setCinema] = useState(false);
-  /** How the camera behaves during a showcase duel: held, orbiting or following. */
-  const [showcaseCamera, setShowcaseCamera] = useState<ShowcaseCamera>("follow");
+  const [cameraFlipped, setCameraFlipped] = useState(false);
+  const [tactical, setTactical] = useState(false);
+  const [lastConfig, setLastConfig] = useState<MatchConfig>({ mode: "ai", difficulty: 2, humanColor: "red" });
 
-  // ------------------------------------------------------------ boot the scene
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    // Headless/blocked environments cannot create a WebGL context — fail loudly
-    // with a readable message instead of a black screen.
-    const probe = document.createElement("canvas");
-    const supported = Boolean(probe.getContext("webgl2") ?? probe.getContext("webgl"));
-    if (!supported) {
-      setUnsupported(true);
-      return;
-    }
-
-    let engine: SceneEngine;
-    try {
-      engine = new SceneEngine(
-        canvas,
-        controller,
-        {
-          onLoadProgress: (ratio) => setProgress(ratio),
-          onReady: () => setPhase("menu"),
-          onPromotionOpen: (open) => setPromotionOpen(open),
-          onQualityAdjusted: (preset) => {
-            setSettings((current) => ({ ...current, quality: preset }));
-            setNotice(`Graphics stepped down to ${preset} to hold a smooth frame rate.`);
-            setTimeout(() => setNotice(null), 5000);
-          },
-          onFps: (value) => setFps(value),
-          onContextLost: () => setContextLost(true),
-          onCameraFlipped: (flipped) => setCameraFlipped(flipped),
-          onTacticalView: (active) => setTactical(active),
-          onRenderFallback: (message, safe) => {
-            if (safe) setSettings((current) => ({ ...current, safeMode: true }));
-            setNotice(message);
-            setTimeout(() => setNotice(null), 9000);
-          },
-        },
-        detected,
-        DEFAULT_ARENA,
-      );
-    } catch (error) {
-      console.error("[ui] could not start the renderer", error);
-      setUnsupported(true);
-      return;
-    }
-
-    engineRef.current = engine;
-    engine.setInteractive(false);
-    engine.setSafeMode(initialRender.safeMode);
-    engine.setBrightness(initialRender.brightness);
-    setGpu(engine.getGpuSummary());
-    engine.start();
-
-    void engine.load().then(async () => {
-      setIntroPlaying(true);
-      await engine.playIntro();
-      setIntroPlaying(false);
-    });
-
-    return () => {
-      engineRef.current = null;
-      engine.dispose();
-    };
-  }, [controller, detected, initialRender]);
-
+  useEffect(() => controller.on("state", setSnapshot), [controller]);
   useEffect(() => () => controller.dispose(), [controller]);
 
-  // ----------------------------------------------------- audio unlock on input
   useEffect(() => {
-    const unlock = (): void => {
-      void audio.unlock();
-    };
+    const copy = UI_COPY[locale];
+    storeLocale(locale);
+    document.documentElement.lang = locale;
+    document.title = copy.documentTitle;
+    updateMeta('meta[name="description"]', copy.description);
+    updateMeta('meta[property="og:title"]', copy.documentTitle);
+    updateMeta('meta[property="og:description"]', copy.description);
+  }, [locale]);
+
+  useEffect(() => {
+    const unlock = (): void => { void audio.unlock(); };
     window.addEventListener("pointerdown", unlock, { once: true });
     window.addEventListener("keydown", unlock, { once: true });
     return () => {
@@ -174,7 +109,75 @@ export function GameShell() {
     };
   }, []);
 
-  // ----------------------------------------------------------- apply settings
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const probe = document.createElement("canvas");
+    if (!probe.getContext("webgl2") && !probe.getContext("webgl")) {
+      setUnsupported(true);
+      return;
+    }
+
+    let disposed = false;
+    let engine: SceneEngine;
+    try {
+      engine = new SceneEngine(
+        canvas,
+        controller as unknown as GameController,
+        {
+          onLoadProgress: setProgress,
+          onReady: () => setProgress(1),
+          onPromotionOpen: () => undefined,
+          onQualityAdjusted: (quality) => {
+            setSettings((current) => ({ ...current, quality }));
+            setNotice(locale === "zh-CN" ? `为保持流畅，画质已自动调整为 ${quality}` : `Graphics adjusted to ${quality}`);
+            window.setTimeout(() => setNotice(null), 5000);
+          },
+          onFps: setFps,
+          onContextLost: () => setContextLost(true),
+          onCameraFlipped: setCameraFlipped,
+          onTacticalView: setTactical,
+          onRenderFallback: (message, safe) => {
+            if (safe) setSettings((current) => ({ ...current, safeMode: true }));
+            setNotice(message);
+            window.setTimeout(() => setNotice(null), 8000);
+          },
+        },
+        detected,
+        DEFAULT_ARENA,
+      );
+    } catch (error) {
+      console.error("[xiangqi-shell] renderer failed", error);
+      setUnsupported(true);
+      return;
+    }
+
+    engineRef.current = engine;
+    engine.setInteractive(false);
+    engine.setSafeMode(initialSettings.safeMode);
+    engine.setBrightness(initialSettings.brightness);
+    setGpu(engine.getGpuSummary());
+    engine.start();
+
+    void engine.load().then(async () => {
+      if (disposed) return;
+      setIntroPlaying(true);
+      await engine.playIntro();
+      if (disposed) return;
+      setIntroPlaying(false);
+      setPhase("menu");
+    }).catch((error) => {
+      console.error("[xiangqi-shell] assets failed", error);
+      if (!disposed) setUnsupported(true);
+    });
+
+    return () => {
+      disposed = true;
+      engineRef.current = null;
+      engine.dispose();
+    };
+  }, [controller, detected, initialSettings, locale]);
+
   useEffect(() => {
     const engine = engineRef.current;
     if (!engine) return;
@@ -186,110 +189,34 @@ export function GameShell() {
     engine.setSafeMode(settings.safeMode);
     engine.setBrightness(settings.brightness);
     audio.setMuted(settings.muted);
-    saveRenderPrefs({ safeMode: settings.safeMode, brightness: settings.brightness });
+    saveSettings(settings);
   }, [settings]);
 
-  // ------------------------------------------------------------- attract mode
-  const stopAttract = useCallback(() => {
-    if (attractTimer.current) {
-      clearTimeout(attractTimer.current);
-      attractTimer.current = null;
-    }
-    if (!attract) return;
-    setAttract(false);
-    controller.stop();
-    engineRef.current?.setAttract(false);
-    engineRef.current?.resync();
-  }, [attract, controller]);
+  const toggleLocale = useCallback(() => {
+    setLocale((current) => current === "zh-CN" ? "en-US" : "zh-CN");
+  }, []);
 
-  const scheduleAttract = useCallback(() => {
-    if (attractTimer.current) clearTimeout(attractTimer.current);
-    attractTimer.current = setTimeout(() => {
-      if (phase !== "menu" || showSettings) return;
-      setAttract(true);
-      engineRef.current?.setAttract(true);
-      controller.start({ mode: "attract", difficulty: "medium", playerColor: "w", clockMinutes: null });
-    }, ATTRACT_DELAY_MS);
-  }, [controller, phase, showSettings]);
-
-  useEffect(() => {
-    if (phase !== "menu" || attract || introPlaying) return;
-    scheduleAttract();
-    return () => {
-      if (attractTimer.current) clearTimeout(attractTimer.current);
-    };
-  }, [phase, attract, introPlaying, scheduleAttract]);
-
-  // ------------------------------------------------------------------ actions
-  const startMatch = useCallback(
-    (config: MatchConfig) => {
-      stopAttract();
-      void audio.unlock();
-      audio.blip("press");
-      const engine = engineRef.current;
-      const showcase = config.mode === "demo";
-      engine?.setAttract(false);
-      engine?.setInteractive(true);
-      // A showcase brings its own framing (and its own crisp grade) with it.
-      engine?.setShowcase(showcase, showcaseCamera);
-      if (!showcase) {
-        engine?.setCameraPreset(config.mode === "ai" && config.playerColor === "b" ? "black" : "white");
-      }
-      controller.start({
-        mode: config.mode,
-        difficulty: config.difficulty,
-        playerColor: config.playerColor,
-        clockMinutes: config.clockMinutes,
-        demo: config.demo,
-      });
-      setPhase("playing");
-    },
-    [controller, showcaseCamera, stopAttract],
-  );
+  const startMatch = useCallback((config: MatchConfig) => {
+    void audio.unlock();
+    audio.blip("press");
+    setLastConfig(config);
+    controller.start(config);
+    const engine = engineRef.current;
+    engine?.setInteractive(true);
+    engine?.setTacticalView(false);
+    engine?.setCameraPreset(config.mode === "ai" && config.humanColor === "black" ? "black" : "white");
+    setPhase("playing");
+  }, [controller]);
 
   const returnToMenu = useCallback(() => {
     controller.stop();
     const engine = engineRef.current;
     engine?.setTacticalView(false);
     engine?.setInteractive(false);
-    engine?.setShowcase(false);
     engine?.setCameraPreset("cinematic");
-    setCinema(false);
+    setShowSettings(false);
     setPhase("menu");
   }, [controller]);
-
-  // -------------------------------------------------------- showcase controls
-  const handleTogglePause = useCallback(() => {
-    audio.blip("press");
-    controller.togglePaused();
-  }, [controller]);
-
-  const handleDemoSpeed = useCallback(
-    (speed: number) => {
-      audio.blip("press");
-      controller.setDemoSpeed(speed);
-    },
-    [controller],
-  );
-
-  const handleDemoLoop = useCallback(
-    (loop: boolean) => {
-      audio.blip("press");
-      controller.setDemoAutoRematch(loop);
-    },
-    [controller],
-  );
-
-  const handleDemoRestart = useCallback(() => {
-    audio.blip("press");
-    controller.restartDemo();
-  }, [controller]);
-
-  const handleShowcaseCamera = useCallback((mode: ShowcaseCamera) => {
-    audio.blip("press");
-    setShowcaseCamera(mode);
-    engineRef.current?.setShowcaseCamera(mode);
-  }, []);
 
   const handleUndo = useCallback(() => {
     if (controller.undo()) {
@@ -305,20 +232,11 @@ export function GameShell() {
     controller.resign();
   }, [controller]);
 
-  const handleRematch = useCallback(() => {
-    const current = controller.getSnapshot();
-    startMatch({
-      mode: current.mode === "hotseat" ? "hotseat" : "ai",
-      difficulty: current.difficulty,
-      playerColor: current.playerColor,
-      clockMinutes: current.clock.enabled ? current.clock.initialMs / 60_000 : null,
-    });
-  }, [controller, startMatch]);
+  const handleRematch = useCallback(() => startMatch(lastConfig), [lastConfig, startMatch]);
 
   const handleFullscreen = useCallback(() => {
-    const element = document.documentElement;
     if (document.fullscreenElement) void document.exitFullscreen();
-    else void element.requestFullscreen().catch((error) => console.warn("[ui] fullscreen refused", error));
+    else void document.documentElement.requestFullscreen().catch((error) => console.warn("[ui] fullscreen refused", error));
   }, []);
 
   const handleCamera = useCallback((preset: CameraPreset) => {
@@ -338,9 +256,8 @@ export function GameShell() {
     engine.setTacticalView(!engine.isTacticalView());
   }, []);
 
-  const handleArena = useCallback((theme: ArenaTheme) => {
-    audio.blip("press");
-    setSettings((current) => (current.arena === theme ? current : { ...current, arena: theme }));
+  const handleArena = useCallback((arena: ArenaTheme) => {
+    setSettings((current) => current.arena === arena ? current : { ...current, arena });
   }, []);
 
   const handlePreviewMove = useCallback((move: LedgerMove | null) => {
@@ -350,24 +267,24 @@ export function GameShell() {
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === "Escape") setShowSettings(false);
-      const target = event.target as HTMLElement | null;
-      const typing = target ? /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || target.isContentEditable : false;
-      if (typing || event.metaKey || event.ctrlKey || event.altKey || phase !== "playing") return;
+      if (phase !== "playing" || event.metaKey || event.ctrlKey || event.altKey) return;
       if (event.key === "f" || event.key === "F") handleFlipCamera();
       if (event.key === "t" || event.key === "T") handleToggleTactical();
-      if (event.key === "c" || event.key === "C") setCinema((hidden) => !hidden);
-      if (event.key === " " && snapshot.mode === "demo") {
-        event.preventDefault();
-        controller.togglePaused();
-      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [controller, handleFlipCamera, handleToggleTactical, phase, snapshot.mode]);
+  }, [handleFlipCamera, handleToggleTactical, phase]);
 
-  const skipIntro = useCallback(() => {
-    engineRef.current?.skipIntro();
-  }, []);
+  if (unsupported) {
+    return (
+      <div className="mc-root fixed inset-0 flex items-center justify-center bg-[#05060a] px-6 text-center">
+        <div className="mc-slate mc-goldleaf max-w-sm p-6">
+          <h2 className="mc-display text-lg text-[#f2e2bd]">{locale === "zh-CN" ? "无法开启 3D 战场" : "The hall needs WebGL"}</h2>
+          <p className="mt-2 text-sm text-[#b7a88a]">{locale === "zh-CN" ? "请在浏览器中开启硬件加速后重新加载。" : "Enable hardware acceleration and reload the page."}</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -375,45 +292,27 @@ export function GameShell() {
       data-arena={settings.arena}
       style={{ "--mc-vignette": ARENA_LOOKS[settings.arena].screenVignette } as CSSProperties}
     >
-      <div className="mc-canvas-wrap">
-        <canvas ref={canvasRef} />
-      </div>
+      <div className="mc-canvas-wrap"><canvas ref={canvasRef} /></div>
       <div className="mc-vignette" />
 
-      {/* Overlay layer */}
       <div className="pointer-events-none absolute inset-0">
-        {phase === "loading" && !unsupported ? <LoadingScreen progress={progress} /> : null}
-
-        {unsupported ? (
-          <div className="pointer-events-auto absolute inset-0 z-40 flex items-center justify-center px-6 text-center">
-            <div className="mc-slate mc-goldleaf max-w-sm p-6">
-              <h2 className="mc-display text-lg text-[#f2e2bd]">The hall needs WebGL</h2>
-              <p className="mt-2 text-sm text-[#b7a88a]">
-                This browser or preview surface cannot open a 3D context. Open the game in a desktop or tablet browser
-                with hardware acceleration enabled.
-              </p>
-            </div>
-          </div>
-        ) : null}
+        {phase === "loading" ? <LoadingScreen locale={locale} progress={progress} /> : null}
 
         {phase === "menu" && !introPlaying ? (
-          <MainMenu
-            onStart={startMatch}
-            onOpenSettings={() => setShowSettings(true)}
-            attract={attract}
-            onInteract={stopAttract}
-          />
+          <MainMenu locale={locale} onToggleLocale={toggleLocale} onStart={startMatch} onOpenSettings={() => setShowSettings(true)} />
         ) : null}
 
-        {phase === "playing" && !cinema ? (
+        {phase === "playing" ? (
           <Hud
             snapshot={snapshot}
+            locale={locale}
             muted={settings.muted}
             fps={fps}
             onNewGame={returnToMenu}
             onUndo={handleUndo}
             onResign={handleResign}
             onToggleSound={() => setSettings((current) => ({ ...current, muted: !current.muted }))}
+            onToggleLocale={toggleLocale}
             onFullscreen={handleFullscreen}
             onSettings={() => setShowSettings(true)}
             onCamera={handleCamera}
@@ -424,48 +323,18 @@ export function GameShell() {
             arena={settings.arena}
             onArena={handleArena}
             onPreviewMove={handlePreviewMove}
-            onTogglePause={handleTogglePause}
-            onDemoSpeed={handleDemoSpeed}
-            onDemoLoop={handleDemoLoop}
-            onDemoRestart={handleDemoRestart}
-            showcaseCamera={showcaseCamera}
-            onShowcaseCamera={handleShowcaseCamera}
-            onToggleCinema={() => setCinema(true)}
           />
         ) : null}
 
-        {phase === "playing" && cinema ? (
-          <button
-            type="button"
-            className="mc-cinema-restore pointer-events-auto"
-            onClick={() => setCinema(false)}
-            title="Show the interface again (C)"
-            aria-label="Show the interface again"
-          >
-            <Clapperboard size={15} />
-          </button>
-        ) : null}
-
-        {promotionOpen ? (
-          <div className="mc-fade pointer-events-none absolute inset-x-0 top-1/2 flex justify-center">
-            <p className="mc-display mc-slate px-4 py-2 text-xs tracking-[0.28em] text-[#f0dfb6]">
-              CHOOSE THE NEW CHAMPION
-            </p>
-          </div>
-        ) : null}
-
         {introPlaying ? (
-          <button
-            type="button"
-            onClick={skipIntro}
-            className="pointer-events-auto absolute inset-0 flex cursor-pointer items-end justify-center bg-transparent pb-10"
-          >
-            <span className="mc-display mc-pulse text-[0.68rem] tracking-[0.4em] text-[#c8ab74]">CLICK TO SKIP</span>
+          <button type="button" onClick={() => engineRef.current?.skipIntro()} className="pointer-events-auto absolute inset-0 flex cursor-pointer items-end justify-center bg-transparent pb-10">
+            <span className="mc-display mc-pulse text-[0.68rem] tracking-[0.36em] text-[#c8ab74]">{locale === "zh-CN" ? "点击跳过开场" : "CLICK TO SKIP"}</span>
           </button>
         ) : null}
 
         {showSettings ? (
           <SettingsPanel
+            locale={locale}
             settings={settings}
             autoDetected={detected}
             gpu={gpu}
@@ -475,10 +344,11 @@ export function GameShell() {
           />
         ) : null}
 
-        {phase === "playing" && !cinema && snapshot.status === "over" && snapshot.result && !snapshot.demo?.autoRematch ? (
+        {phase === "playing" && snapshot.status === "over" && snapshot.result ? (
           <GameOverModal
+            locale={locale}
             result={snapshot.result}
-            pgn={snapshot.pgn}
+            record={snapshot.pgn}
             playerColor={snapshot.playerColor}
             versusComputer={snapshot.mode === "ai"}
             onRematch={handleRematch}
@@ -486,22 +356,14 @@ export function GameShell() {
           />
         ) : null}
 
-        {notice ? (
-          <div className="mc-fade mc-slate pointer-events-none absolute bottom-20 left-1/2 -translate-x-1/2 px-4 py-2 text-xs text-[#e4d3ac]">
-            {notice}
-          </div>
-        ) : null}
+        {notice ? <div className="mc-fade mc-slate pointer-events-none absolute bottom-20 left-1/2 -translate-x-1/2 px-4 py-2 text-xs text-[#e4d3ac]">{notice}</div> : null}
 
         {contextLost ? (
           <div className="pointer-events-auto absolute inset-0 z-40 flex items-center justify-center bg-black/80 px-6 text-center">
             <div className="mc-slate mc-goldleaf max-w-sm p-6">
-              <h2 className="mc-display text-lg text-[#f2e2bd]">The hall went dark</h2>
-              <p className="mt-2 text-sm text-[#b7a88a]">
-                The graphics context was lost. Reload to relight the torches.
-              </p>
-              <button type="button" className="mc-btn mc-btn-primary mt-4 w-full" onClick={() => window.location.reload()}>
-                Reload
-              </button>
+              <h2 className="mc-display text-lg text-[#f2e2bd]">{locale === "zh-CN" ? "战场熄灭了" : "The hall went dark"}</h2>
+              <p className="mt-2 text-sm text-[#b7a88a]">{locale === "zh-CN" ? "图形上下文已丢失，请重新加载页面。" : "The graphics context was lost. Reload the page."}</p>
+              <button type="button" className="mc-btn mc-btn-primary mt-4 w-full" onClick={() => window.location.reload()}>{locale === "zh-CN" ? "重新加载" : "Reload"}</button>
             </div>
           </div>
         ) : null}
@@ -510,18 +372,15 @@ export function GameShell() {
   );
 }
 
-function LoadingScreen({ progress }: { progress: number }) {
+function LoadingScreen({ locale, progress }: { locale: Locale; progress: number }) {
   return (
     <div className="mc-fade absolute inset-0 flex flex-col items-center justify-center gap-5 bg-[#05060a]/85 px-6">
-      <p className="mc-display text-[0.62rem] tracking-[0.5em] text-[#a89268]">MUSTERING THE ARMIES</p>
-      <h1 className="mc-display mc-title-glow text-4xl text-[#f4e3bd]">KING&apos;S GAMBIT</h1>
+      <p className="mc-display text-[0.62rem] tracking-[0.45em] text-[#a89268]">{locale === "zh-CN" ? "正在集结楚汉军阵" : "MUSTERING THE ARMIES"}</p>
+      <h1 className="mc-display mc-title-glow text-4xl text-[#f4e3bd]">{locale === "zh-CN" ? "楚汉棋局" : "CHU–HAN XIANGQI"}</h1>
       <div className="h-[3px] w-64 overflow-hidden rounded-full bg-[#2a251c]">
-        <div
-          className="h-full rounded-full bg-gradient-to-r from-[#8a6522] via-[#f6dfa5] to-[#8a6522] transition-[width] duration-300"
-          style={{ width: `${Math.round(progress * 100)}%` }}
-        />
+        <div className="h-full rounded-full bg-gradient-to-r from-[#8a6522] via-[#f6dfa5] to-[#8a6522] transition-[width] duration-300" style={{ width: `${Math.round(progress * 100)}%` }} />
       </div>
-      <p className="text-xs italic text-[#7d6f57]">Carving {Math.round(progress * 6)} of 6 figures…</p>
+      <p className="text-xs italic text-[#7d6f57]">{Math.round(progress * 100)}%</p>
     </div>
   );
 }
