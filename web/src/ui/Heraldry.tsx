@@ -8,7 +8,6 @@ interface CrestProps {
   active?: boolean;
 }
 
-/** Faction crest: red uses the ivory shield slot, black the obsidian sun slot. */
 export const Crest = memo(function Crest({ faction, size = 34, active = false }: CrestProps) {
   const field = faction === "w" ? "#e9dfc8" : "#1d1e24";
   const charge = faction === "w" ? "#a8342a" : "#d58a38";
@@ -51,7 +50,8 @@ export const Hourglass = memo(function Hourglass({ ratio, urgent }: HourglassPro
   );
 });
 
-const GLYPHS: Record<PieceKind, string> = {
+/** Includes the runtime `e` marker used by the Xiangqi elephant adapter. */
+const GLYPHS: Record<string, string> = {
   k: "帅",
   q: "炮",
   r: "车",
@@ -62,5 +62,5 @@ const GLYPHS: Record<PieceKind, string> = {
 };
 
 export function pieceGlyph(kind: PieceKind): string {
-  return GLYPHS[kind];
+  return GLYPHS[String(kind)] ?? "?";
 }
