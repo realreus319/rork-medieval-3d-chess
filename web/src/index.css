@@ -1,105 +1,91 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
-All colors MUST be HSL.
-*/
-
-@layer base {
-  :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
-
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
-
-    --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
-
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
-
-    --radius: 0.5rem;
-
-    --sidebar-background: 0 0% 98%;
-
-    --sidebar-foreground: 240 5.3% 26.1%;
-
-    --sidebar-primary: 240 5.9% 10%;
-
-    --sidebar-primary-foreground: 0 0% 98%;
-
-    --sidebar-accent: 240 4.8% 95.9%;
-
-    --sidebar-accent-foreground: 240 5.9% 10%;
-
-    --sidebar-border: 220 13% 91%;
-
-    --sidebar-ring: 217.2 91.2% 59.8%;
-  }
-
-  .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
-
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 212.7 26.8% 83.9%;
-    --sidebar-background: 240 5.9% 10%;
-    --sidebar-foreground: 240 4.8% 95.9%;
-    --sidebar-primary: 224.3 76.3% 48%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 240 3.7% 15.9%;
-    --sidebar-accent-foreground: 240 4.8% 95.9%;
-    --sidebar-border: 240 3.7% 15.9%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
-  }
+:root {
+  font-family: Inter, "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  color: #f7ead4;
+  background: #15100c;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
 }
 
-@layer base {
-  * {
-    @apply border-border;
-  }
+* { box-sizing: border-box; }
+html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+button { font: inherit; }
 
-  body {
-    @apply bg-background text-foreground;
-  }
+.app-shell { position: relative; width: 100%; height: 100%; background: #15100c; }
+.scene { position: absolute; inset: 0; }
+.scene canvas { display: block; width: 100%; height: 100%; }
+.vignette { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(circle at 50% 44%, transparent 45%, rgba(6,4,2,.62) 115%); }
+.glass-panel { background: linear-gradient(145deg, rgba(37,28,21,.86), rgba(17,13,10,.72)); border: 1px solid rgba(235,193,126,.2); box-shadow: 0 18px 55px rgba(0,0,0,.26), inset 0 1px rgba(255,255,255,.04); backdrop-filter: blur(16px); }
+
+.topbar { position: absolute; top: 20px; left: 20px; right: 20px; min-height: 64px; border-radius: 18px; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 10px 12px 10px 16px; }
+.brand { display: flex; gap: 11px; align-items: center; }
+.brand-seal { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 12px; background: linear-gradient(145deg,#a92f24,#741b16); color: #ffe9c3; font-family: "Songti SC", serif; font-size: 24px; border: 1px solid rgba(255,225,174,.42); box-shadow: 0 6px 18px rgba(127,25,18,.38); }
+.brand strong, .brand span { display: block; }
+.brand strong { font-family: "Songti SC", serif; font-size: 18px; letter-spacing: .14em; }
+.brand div > span { margin-top: 2px; color: #a99479; font-size: 9px; letter-spacing: .28em; }
+.turn-indicator { display: flex; align-items: center; gap: 8px; border-radius: 999px; padding: 9px 15px; border: 1px solid; font-size: 13px; letter-spacing: .08em; }
+.turn-indicator.red { color: #ffd9cf; border-color: rgba(224,82,64,.45); background: rgba(127,30,23,.3); }
+.turn-indicator.black { color: #f2e7d7; border-color: rgba(191,174,147,.3); background: rgba(10,10,10,.32); }
+.toolbar { justify-self: end; display: flex; gap: 7px; }
+.toolbar button { width: 40px; height: 40px; border-radius: 11px; border: 1px solid rgba(235,193,126,.15); color: #ead8ba; background: rgba(255,255,255,.035); display: grid; place-items: center; cursor: pointer; transition: .2s ease; }
+.toolbar button:hover:not(:disabled) { background: rgba(224,170,91,.16); border-color: rgba(235,193,126,.36); transform: translateY(-1px); }
+.toolbar button:disabled { opacity: .35; cursor: default; }
+
+.control-panel { position: absolute; left: 20px; top: 104px; width: 265px; border-radius: 18px; padding: 16px; }
+.panel-title { display: flex; align-items: center; justify-content: space-between; padding-bottom: 12px; border-bottom: 1px solid rgba(236,203,151,.12); }
+.panel-title > span { display: flex; align-items: center; gap: 7px; font-family: "Songti SC", serif; letter-spacing: .1em; }
+.panel-title small { color: #9f8a70; }
+.mode-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
+.mode-switch button, .difficulty button { border: 1px solid rgba(235,193,126,.13); border-radius: 10px; background: rgba(255,255,255,.035); color: #bdaa8f; cursor: pointer; transition: .2s; }
+.mode-switch button { min-height: 58px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; font-size: 12px; }
+.mode-switch button.active, .difficulty button.active { color: #ffe2b2; background: linear-gradient(145deg,rgba(151,60,36,.42),rgba(87,34,23,.25)); border-color: rgba(229,139,91,.38); }
+.difficulty { margin-top: 15px; }
+.difficulty > span { display: block; font-size: 11px; color: #9f8a70; margin-bottom: 8px; }
+.difficulty > div { display: grid; grid-template-columns: repeat(3,1fr); gap: 6px; }
+.difficulty button { padding: 8px 4px; font-size: 11px; }
+.rule-note { margin-top: 16px; padding: 12px; border-radius: 12px; background: rgba(197,137,70,.07); border: 1px solid rgba(236,189,115,.1); }
+.rule-note strong, .rule-note span { display: block; }
+.rule-note strong { font-size: 12px; color: #e5c79a; margin-bottom: 5px; }
+.rule-note span { color: #907d65; line-height: 1.7; font-size: 10px; }
+
+.ledger { position: absolute; right: 20px; top: 104px; width: 285px; max-height: calc(100% - 145px); border-radius: 18px; padding: 16px; display: flex; flex-direction: column; }
+.move-list { min-height: 90px; max-height: 42vh; overflow: auto; padding: 10px 2px; scrollbar-width: thin; scrollbar-color: #6d5037 transparent; }
+.move-list p { color: #7f6e5a; font-size: 12px; text-align: center; padding: 20px 0; }
+.move-list div { display: grid; grid-template-columns: 26px 1fr; gap: 7px; align-items: start; padding: 7px 4px; font-size: 11px; color: #baa58a; border-bottom: 1px solid rgba(255,255,255,.035); }
+.move-list b { color: #725d48; font-weight: 500; }
+.captured-tray { border-top: 1px solid rgba(236,203,151,.12); padding-top: 12px; }
+.captured-tray > span { color: #8e7a63; font-size: 10px; }
+.captured-tray > div { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 8px; min-height: 28px; }
+.captured-tray i { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-style: normal; font-family: "Songti SC", serif; font-size: 13px; background: #c8b58e; border: 1px solid #e1cda6; box-shadow: inset 0 0 0 2px rgba(70,43,24,.25); }
+.captured-tray i.red { color: #a82e25; }
+.captured-tray i.black { color: #24211d; }
+.captured-tray em { color: #6d5f50; font-size: 11px; font-style: normal; }
+
+.hint { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); color: rgba(236,216,184,.55); font-size: 11px; letter-spacing: .08em; text-shadow: 0 2px 8px #000; pointer-events: none; }
+.game-over { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(8,5,3,.56); backdrop-filter: blur(5px); }
+.game-over > div { width: min(390px, calc(100% - 40px)); text-align: center; border-radius: 24px; padding: 30px; }
+.winner-seal { width: 74px; height: 74px; margin: 0 auto 15px; display: grid; place-items: center; border-radius: 50%; font-family: "Songti SC", serif; font-size: 38px; background: #d1bd96; border: 4px double #9e7649; }
+.winner-seal.red { color: #a7241e; }
+.winner-seal.black { color: #25211b; }
+.game-over h1 { font-family: "Songti SC", serif; letter-spacing: .15em; margin: 0; }
+.game-over p { color: #9d8b74; font-size: 13px; }
+.game-over button { margin-top: 12px; border: 1px solid rgba(245,198,125,.35); border-radius: 12px; padding: 11px 28px; color: #ffe5bd; background: linear-gradient(145deg,#963526,#642219); cursor: pointer; }
+
+@media (max-width: 900px) {
+  .topbar { top: 10px; left: 10px; right: 10px; grid-template-columns: 1fr auto; }
+  .turn-indicator { grid-row: 2; grid-column: 1 / -1; justify-self: center; margin-top: 8px; }
+  .toolbar button:nth-child(2), .toolbar button:nth-child(3) { display: none; }
+  .control-panel { left: 10px; top: auto; bottom: 42px; width: 220px; padding: 12px; }
+  .ledger { right: 10px; top: auto; bottom: 42px; width: 190px; max-height: 230px; padding: 12px; }
+  .move-list { max-height: 110px; }
+  .rule-note, .difficulty > span { display: none; }
+  .hint { bottom: 14px; }
+}
+
+@media (max-width: 620px) {
+  .brand div { display: none; }
+  .topbar { min-height: auto; }
+  .control-panel { left: 8px; right: 8px; width: auto; bottom: 35px; }
+  .ledger { display: none; }
+  .mode-switch button { min-height: 42px; flex-direction: row; }
+  .difficulty { margin-top: 8px; }
 }
