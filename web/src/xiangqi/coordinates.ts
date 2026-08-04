@@ -5,9 +5,9 @@ export const XIANGQI_ROWS = 10;
 export const XIANGQI_COLS = 9;
 
 /**
- * SceneEngine follows the original chess orientation: faction `w` starts near
- * rank 1. Red maps to `w`, so red's home row (logical row 9) must be rank 1 and
- * black's home row (logical row 0) rank 10.
+ * The Xiangqi board renderer places logical row 0 at rank 1 and logical row 9
+ * at rank 10. Red starts on logical row 9, which is also the near side of the
+ * original white/red camera in the adapted 9×10 scene.
  */
 export function positionToSquare(position: Position): string {
   if (
@@ -18,13 +18,12 @@ export function positionToSquare(position: Position): string {
   ) {
     throw new Error(`Invalid Xiangqi position: ${position.row},${position.col}`);
   }
-  return `${XIANGQI_FILES[position.col]}${XIANGQI_ROWS - position.row}`;
+  return `${XIANGQI_FILES[position.col]}${position.row + 1}`;
 }
 
 export function squareToPosition(square: string): Position | null {
   const col = XIANGQI_FILES.indexOf(square[0] ?? "");
   const rank = Number.parseInt(square.slice(1), 10);
-  const row = XIANGQI_ROWS - rank;
   if (!Number.isInteger(rank) || rank < 1 || rank > XIANGQI_ROWS || col < 0) return null;
-  return { row, col };
+  return { row: rank - 1, col };
 }
