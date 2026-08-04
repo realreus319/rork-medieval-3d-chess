@@ -69,7 +69,7 @@ export const PIECE_VALUES: Record<PieceType, number> = {
   soldier: 100,
 };
 
-const backRank: PieceType[] = [
+const BACK_RANK: PieceType[] = [
   "rook",
   "horse",
   "elephant",
@@ -81,22 +81,47 @@ const backRank: PieceType[] = [
   "rook",
 ];
 
+const ORTHOGONAL: Position[] = [
+  { row: -1, col: 0 },
+  { row: 1, col: 0 },
+  { row: 0, col: -1 },
+  { row: 0, col: 1 },
+];
+
+const DIAGONAL: Position[] = [
+  { row: -1, col: -1 },
+  { row: -1, col: 1 },
+  { row: 1, col: -1 },
+  { row: 1, col: 1 },
+];
+
+const HORSE_PATTERNS = [
+  { leg: { row: -1, col: 0 }, target: { row: -2, col: -1 } },
+  { leg: { row: -1, col: 0 }, target: { row: -2, col: 1 } },
+  { leg: { row: 1, col: 0 }, target: { row: 2, col: -1 } },
+  { leg: { row: 1, col: 0 }, target: { row: 2, col: 1 } },
+  { leg: { row: 0, col: -1 }, target: { row: -1, col: -2 } },
+  { leg: { row: 0, col: -1 }, target: { row: 1, col: -2 } },
+  { leg: { row: 0, col: 1 }, target: { row: -1, col: 2 } },
+  { leg: { row: 0, col: 1 }, target: { row: 1, col: 2 } },
+] as const;
+
 const opposite = (color: Color): Color => (color === "red" ? "black" : "red");
-const inside = ({ row, col }: Position) => row >= 0 && row < ROWS && col >= 0 && col < COLS;
-const samePosition = (a: Position, b: Position) => a.row === b.row && a.col === b.col;
+const inside = ({ row, col }: Position): boolean => row >= 0 && row < ROWS && col >= 0 && col < COLS;
+const samePosition = (a: Position, b: Position): boolean => a.row === b.row && a.col === b.col;
 
 export function createInitialState(): GameState {
   const pieces: Piece[] = [];
-  const add = (color: Color, type: PieceType, row: number, col: number, index: number) => {
+  const add = (color: Color, type: PieceType, row: number, col: number, index: number): void => {
     pieces.push({ id: `${color}-${type}-${index}`, color, type, row, col });
   };
 
-  backRank.forEach((type, col) => add("black", type, 0, col, col));
+  BACK_RANK.forEach((type, col) => add("black", type, 0, col, col));
   add("black", "cannon", 2, 1, 0);
   add("black", "cannon", 2, 7, 1);
   [0, 2, 4, 6, 8].forEach((col, index) => add("black", "soldier", 3, col, index));
 
-  backRank.forEach((type, col) => add("red", type, 9, col, col));
+  BACK_RANK.forEach((type, col) => add("red", type, 9, col, col));
   add("red", "cannon", 7, 1, 0);
   add("red", "cannon", 7, 7, 1);
   [0, 2, 4, 6, 8].forEach((col, index) => add("red", "soldier", 6, col, index));
@@ -113,29 +138,49 @@ function inPalace(color: Color, position: Position): boolean {
   return color === "red" ? position.row >= 7 && position.row <= 9 : position.row >= 0 && position.row <= 2;
 }
 
+function elephantOnHomeSide(color: Color, row: number): boolean {
+  return color === "red" ? row >= 5 : row <= 4;
+}
+
 function crossedRiver(color: Color, row: number): boolean {
   return color === "red" ? row <= 4 : row >= 5;
 }
 
-function pushIfAvailable(state: GameState, piece: Piece, target: Position, moves: Move[]) {
+function pushIfAvailable(state: GameState, piece: Piece, target: Position, moves: Move[]): void {
   if (!inside(target)) return;
   const occupant = pieceAt(state, target);
-  if (!occupant || occupant.color !== piece.color) {
-    moves.push({
-      pieceId: piece.id,
-      from: { row: piece.row, col: piece.col },
-      to: target,
-      capturedId: occupant?.id,
-    });
-  }
+  if (occupant?.color === piece.color) return;
+  moves.push({
+    pieceId: piece.id,
+    from: { row: piece.row, col: piece.col },
+    to: { ...target },
+    capturedId: occupant?.id,
+  });
 }
 
-function slideMoves(state: GameState, piece: Piece, directions: Position[], cannon: boolean): Move[] {
+function countBetween(state: GameState, from: Position, to: Position): number | null {
+  const sameRow = from.row === to.row;
+  const sameCol = from.col === to.col;
+  if (!sameRow && !sameCol) return null;
+  const rowStep = Math.sign(to.row - from.row);
+  const colStep = Math.sign(to.col - from.col);
+  let row = from.row + rowStep;
+  let col = from.col + colStep;
+  let count = 0;
+  while (row !== to.row || col !== to.col) {
+    if (pieceAt(state, { row, col })) count += 1;
+    row += rowStep;
+    col += colStep;
+  }
+  return count;
+}
+
+function slideMoves(state: GameState, piece: Piece, cannon: boolean): Move[] {
   const moves: Move[] = [];
-  for (const direction of directions) {
+  for (const direction of ORTHOGONAL) {
     let row = piece.row + direction.row;
     let col = piece.col + direction.col;
-    let screens = 0;
+    let screened = false;
     while (inside({ row, col })) {
       const occupant = pieceAt(state, { row, col });
       if (!cannon) {
@@ -152,11 +197,11 @@ function slideMoves(state: GameState, piece: Piece, directions: Position[], cann
           }
           break;
         }
-      } else if (screens === 0) {
+      } else if (!screened) {
         if (!occupant) {
           moves.push({ pieceId: piece.id, from: { row: piece.row, col: piece.col }, to: { row, col } });
         } else {
-          screens = 1;
+          screened = true;
         }
       } else if (occupant) {
         if (occupant.color !== piece.color) {
@@ -178,56 +223,37 @@ function slideMoves(state: GameState, piece: Piece, directions: Position[], cann
 
 export function pseudoMovesForPiece(state: GameState, piece: Piece): Move[] {
   const moves: Move[] = [];
-  const orthogonal = [
-    { row: -1, col: 0 },
-    { row: 1, col: 0 },
-    { row: 0, col: -1 },
-    { row: 0, col: 1 },
-  ];
 
   switch (piece.type) {
     case "rook":
-      return slideMoves(state, piece, orthogonal, false);
+      return slideMoves(state, piece, false);
     case "cannon":
-      return slideMoves(state, piece, orthogonal, true);
+      return slideMoves(state, piece, true);
     case "general": {
-      for (const direction of orthogonal) {
+      for (const direction of ORTHOGONAL) {
         const target = { row: piece.row + direction.row, col: piece.col + direction.col };
         if (inPalace(piece.color, target)) pushIfAvailable(state, piece, target, moves);
       }
       const enemyGeneral = state.pieces.find(
         (candidate) => candidate.type === "general" && candidate.color !== piece.color,
       );
-      if (enemyGeneral && enemyGeneral.col === piece.col) {
-        const min = Math.min(piece.row, enemyGeneral.row) + 1;
-        const max = Math.max(piece.row, enemyGeneral.row);
-        const blocked = state.pieces.some(
-          (candidate) => candidate.col === piece.col && candidate.row >= min && candidate.row < max,
-        );
-        if (!blocked) {
-          moves.push({
-            pieceId: piece.id,
-            from: { row: piece.row, col: piece.col },
-            to: { row: enemyGeneral.row, col: enemyGeneral.col },
-            capturedId: enemyGeneral.id,
-          });
-        }
+      if (enemyGeneral && enemyGeneral.col === piece.col && countBetween(state, piece, enemyGeneral) === 0) {
+        moves.push({
+          pieceId: piece.id,
+          from: { row: piece.row, col: piece.col },
+          to: { row: enemyGeneral.row, col: enemyGeneral.col },
+          capturedId: enemyGeneral.id,
+        });
       }
       return moves;
     }
-    case "advisor": {
-      for (const delta of [
-        { row: -1, col: -1 },
-        { row: -1, col: 1 },
-        { row: 1, col: -1 },
-        { row: 1, col: 1 },
-      ]) {
+    case "advisor":
+      for (const delta of DIAGONAL) {
         const target = { row: piece.row + delta.row, col: piece.col + delta.col };
         if (inPalace(piece.color, target)) pushIfAvailable(state, piece, target, moves);
       }
       return moves;
-    }
-    case "elephant": {
+    case "elephant":
       for (const delta of [
         { row: -2, col: -2 },
         { row: -2, col: 2 },
@@ -236,23 +262,13 @@ export function pseudoMovesForPiece(state: GameState, piece: Piece): Move[] {
       ]) {
         const target = { row: piece.row + delta.row, col: piece.col + delta.col };
         const eye = { row: piece.row + delta.row / 2, col: piece.col + delta.col / 2 };
-        const staysHome = piece.color === "red" ? target.row >= 5 : target.row <= 4;
-        if (inside(target) && staysHome && !pieceAt(state, eye)) pushIfAvailable(state, piece, target, moves);
+        if (inside(target) && elephantOnHomeSide(piece.color, target.row) && !pieceAt(state, eye)) {
+          pushIfAvailable(state, piece, target, moves);
+        }
       }
       return moves;
-    }
-    case "horse": {
-      const patterns = [
-        { leg: { row: -1, col: 0 }, target: { row: -2, col: -1 } },
-        { leg: { row: -1, col: 0 }, target: { row: -2, col: 1 } },
-        { leg: { row: 1, col: 0 }, target: { row: 2, col: -1 } },
-        { leg: { row: 1, col: 0 }, target: { row: 2, col: 1 } },
-        { leg: { row: 0, col: -1 }, target: { row: -1, col: -2 } },
-        { leg: { row: 0, col: -1 }, target: { row: 1, col: -2 } },
-        { leg: { row: 0, col: 1 }, target: { row: -1, col: 2 } },
-        { leg: { row: 0, col: 1 }, target: { row: 1, col: 2 } },
-      ];
-      for (const pattern of patterns) {
+    case "horse":
+      for (const pattern of HORSE_PATTERNS) {
         const leg = { row: piece.row + pattern.leg.row, col: piece.col + pattern.leg.col };
         if (pieceAt(state, leg)) continue;
         pushIfAvailable(
@@ -263,7 +279,6 @@ export function pseudoMovesForPiece(state: GameState, piece: Piece): Move[] {
         );
       }
       return moves;
-    }
     case "soldier": {
       const forward = piece.color === "red" ? -1 : 1;
       pushIfAvailable(state, piece, { row: piece.row + forward, col: piece.col }, moves);
@@ -276,6 +291,41 @@ export function pseudoMovesForPiece(state: GameState, piece: Piece): Move[] {
   }
 }
 
+function pieceAttacksSquare(state: GameState, piece: Piece, target: Position): boolean {
+  const rowDelta = target.row - piece.row;
+  const colDelta = target.col - piece.col;
+  const absRow = Math.abs(rowDelta);
+  const absCol = Math.abs(colDelta);
+
+  switch (piece.type) {
+    case "rook":
+      return countBetween(state, piece, target) === 0;
+    case "cannon":
+      return countBetween(state, piece, target) === 1;
+    case "general":
+      if (absRow + absCol === 1 && inPalace(piece.color, target)) return true;
+      return piece.col === target.col && countBetween(state, piece, target) === 0;
+    case "advisor":
+      return absRow === 1 && absCol === 1 && inPalace(piece.color, target);
+    case "elephant": {
+      if (absRow !== 2 || absCol !== 2 || !elephantOnHomeSide(piece.color, target.row)) return false;
+      return !pieceAt(state, { row: piece.row + rowDelta / 2, col: piece.col + colDelta / 2 });
+    }
+    case "horse": {
+      if (!((absRow === 2 && absCol === 1) || (absRow === 1 && absCol === 2))) return false;
+      const leg = absRow === 2
+        ? { row: piece.row + Math.sign(rowDelta), col: piece.col }
+        : { row: piece.row, col: piece.col + Math.sign(colDelta) };
+      return !pieceAt(state, leg);
+    }
+    case "soldier": {
+      const forward = piece.color === "red" ? -1 : 1;
+      if (rowDelta === forward && colDelta === 0) return true;
+      return crossedRiver(piece.color, piece.row) && rowDelta === 0 && absCol === 1;
+    }
+  }
+}
+
 function applyUnchecked(state: GameState, move: Move): GameState {
   return {
     ...state,
@@ -284,7 +334,11 @@ function applyUnchecked(state: GameState, move: Move): GameState {
       .map((piece) =>
         piece.id === move.pieceId ? { ...piece, row: move.to.row, col: move.to.col } : { ...piece },
       ),
-    lastMove: move,
+    lastMove: {
+      ...move,
+      from: { ...move.from },
+      to: { ...move.to },
+    },
   };
 }
 
@@ -293,7 +347,7 @@ export function isInCheck(state: GameState, color: Color): boolean {
   if (!general) return true;
   return state.pieces
     .filter((piece) => piece.color !== color)
-    .some((piece) => pseudoMovesForPiece(state, piece).some((move) => samePosition(move.to, general)));
+    .some((piece) => pieceAttacksSquare(state, piece, general));
 }
 
 export function legalMovesForPiece(state: GameState, pieceId: string): Move[] {
@@ -309,15 +363,15 @@ export function allLegalMoves(state: GameState, color: Color = state.turn): Move
 }
 
 export function playMove(state: GameState, requested: Move): GameState {
-  if (state.winner || state.turn !== state.pieces.find((piece) => piece.id === requested.pieceId)?.color) {
-    return state;
-  }
+  const requestedPiece = state.pieces.find((piece) => piece.id === requested.pieceId);
+  if (state.winner || !requestedPiece || requestedPiece.color !== state.turn) return state;
+
   const legal = legalMovesForPiece(state, requested.pieceId).find((move) => samePosition(move.to, requested.to));
   if (!legal) return state;
 
   const mover = state.turn;
-  let next = applyUnchecked(state, legal);
   const enemy = opposite(mover);
+  let next = applyUnchecked(state, legal);
   const enemyGeneral = next.pieces.find((piece) => piece.color === enemy && piece.type === "general");
   if (!enemyGeneral) {
     return { ...next, winner: mover, check: false, turn: enemy, moveNumber: state.moveNumber + 1 };

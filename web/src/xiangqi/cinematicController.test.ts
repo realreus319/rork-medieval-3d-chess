@@ -1,14 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
+import "./elephantVisualPatch";
+import "./elephantStatePatch";
 import { CinematicXiangqiController } from "./cinematicController";
 
 describe("CinematicXiangqiController", () => {
-  it("exposes the 9×10 Xiangqi position through original cinematic archetypes", () => {
+  it("exposes the 9×10 Xiangqi position through cinematic archetypes", () => {
     const controller = new CinematicXiangqiController();
     controller.start({ mode: "local", difficulty: 2, humanColor: "red" });
 
     expect(controller.getBoard()).toHaveLength(32);
     expect(controller.pieceAt("e10")).toEqual({ kind: "k", color: "w" });
     expect(controller.pieceAt("b8")).toEqual({ kind: "q", color: "w" });
+    expect(controller.pieceAt("c10")).toEqual({ kind: "e", color: "w" });
     expect(controller.pieceAt("a7")).toEqual({ kind: "p", color: "w" });
     expect(controller.legalTargets("a7")).toContainEqual({
       to: "a6",

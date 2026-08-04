@@ -1,20 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Box,
   Camera,
-  ChevronRight,
-  Clapperboard,
-  Crosshair,
-  EyeOff,
   Flag,
+  Languages,
   LayoutGrid,
   Maximize,
-  Orbit,
-  Pause,
-  Play,
   Repeat,
   RotateCcw,
-  RotateCw,
   ScrollText,
   Settings as SettingsIcon,
   Swords,
@@ -25,20 +18,22 @@ import {
 } from "lucide-react";
 
 import type { GameSnapshot, LedgerMove, PieceKind } from "../core/types";
-import { ARENA_LOOKS, ARENA_ORDER, type ArenaTheme } from "../scene/arena";
-import type { CameraPreset, ShowcaseCamera } from "../scene/sceneEngine";
-import { Crest, Hourglass, pieceGlyph } from "./Heraldry";
+import { ARENA_ORDER, type ArenaTheme } from "../scene/arena";
+import type { CameraPreset } from "../scene/sceneEngine";
+import type { Locale } from "../xiangqi/i18n";
+import { Crest, pieceGlyph } from "./Heraldry";
 import { MoveLedger } from "./MoveLedger";
-import { Tooltip, type TooltipSide } from "./Tooltip";
 
 interface HudProps {
   snapshot: GameSnapshot;
+  locale: Locale;
   muted: boolean;
   fps: number;
   onNewGame: () => void;
   onUndo: () => void;
   onResign: () => void;
   onToggleSound: () => void;
+  onToggleLocale: () => void;
   onFullscreen: () => void;
   onSettings: () => void;
   onCamera: (preset: CameraPreset) => void;
@@ -49,57 +44,85 @@ interface HudProps {
   arena: ArenaTheme;
   onArena: (theme: ArenaTheme) => void;
   onPreviewMove: (move: LedgerMove | null) => void;
-  onTogglePause: () => void;
-  onDemoSpeed: (speed: number) => void;
-  onDemoLoop: (loop: boolean) => void;
-  onDemoRestart: () => void;
-  showcaseCamera: ShowcaseCamera;
-  onShowcaseCamera: (mode: ShowcaseCamera) => void;
-  onToggleCinema: () => void;
 }
 
-const DEMO_SPEEDS: { label: string; value: number }[] = [
-  { label: "0.5×", value: 0.5 },
-  { label: "1×", value: 1 },
-  { label: "2×", value: 2 },
-  { label: "4×", value: 4 },
-];
+const COPY = {
+  "zh-CN": {
+    ended: "对局结束",
+    thinking: "正在推演",
+    toMove: "当前行棋",
+    red: "红方",
+    black: "黑方",
+    check: "将军",
+    undo: "悔棋",
+    undoHint: "撤销己方上一手以及电脑应手",
+    resign: "认输",
+    resignHint: "立即结束本局并判对方获胜",
+    newGame: "新对局",
+    newGameHint: "返回主菜单重新选择模式",
+    soundOn: "声音开启",
+    soundOff: "声音关闭",
+    fullscreen: "全屏",
+    flip: "翻转视角",
+    tactical: "俯视棋盘",
+    back3d: "返回 3D",
+    camera: "镜头与战场",
+    settings: "设置",
+    ledger: "棋谱",
+    losses: "折损",
+    even: "子力相当",
+    redAhead: "红方领先",
+    blackAhead: "黑方领先",
+    redLost: "红方损失",
+    blackLost: "黑方损失",
+    arenas: { dawn: "晨曦", frost: "霜雪", dusk: "暮色", jungle: "日神" },
+    cameras: { white: "红方视角", black: "黑方视角", top: "正上方", cinematic: "电影镜头" },
+  },
+  "en-US": {
+    ended: "Battle ended",
+    thinking: "Thinking",
+    toMove: "To move",
+    red: "Red",
+    black: "Black",
+    check: "CHECK",
+    undo: "Take back",
+    undoHint: "Undo your last move and the computer reply",
+    resign: "Resign",
+    resignHint: "Concede the game immediately",
+    newGame: "New game",
+    newGameHint: "Return to the main menu",
+    soundOn: "Sound on",
+    soundOff: "Sound off",
+    fullscreen: "Fullscreen",
+    flip: "Flip sides",
+    tactical: "Tactical map",
+    back3d: "Back to 3D",
+    camera: "Camera & arena",
+    settings: "Settings",
+    ledger: "Move record",
+    losses: "Losses",
+    even: "Material even",
+    redAhead: "Red ahead",
+    blackAhead: "Black ahead",
+    redLost: "Red lost",
+    blackLost: "Black lost",
+    arenas: { dawn: "Dawn", frost: "Frost", dusk: "Dusk", jungle: "Temple" },
+    cameras: { white: "Red side", black: "Black side", top: "Overhead", cinematic: "Cinematic" },
+  },
+} as const;
 
-/** Showcase camera behaviours, in the order they appear on the transport. */
-const SHOWCASE_CAMERAS: { key: ShowcaseCamera; label: string; hint: string; icon: typeof Camera }[] = [
-  { key: "still", label: "still", hint: "Hold one angle — the camera never moves on its own", icon: Camera },
-  { key: "follow", label: "follow", hint: "Track the figure on the move and close in on the fight", icon: Crosshair },
-  { key: "orbit", label: "orbit", hint: "Drift slowly around the board", icon: Orbit },
-];
-
-const DIFFICULTY_SHORT: Record<string, string> = {
-  easy: "Squire",
-  medium: "Knight",
-  hard: "Warlord",
-};
-
-const CAMERA_BUTTONS: { key: CameraPreset; label: string }[] = [
-  { key: "white", label: "Ivory" },
-  { key: "black", label: "Obsidian" },
-  { key: "top", label: "Overhead" },
-  { key: "cinematic", label: "Cinematic" },
-];
-
-function formatClock(ms: number): string {
-  const total = Math.max(0, Math.ceil(ms / 1000));
-  const minutes = Math.floor(total / 60);
-  const seconds = total % 60;
-  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
-}
+const CAMERA_BUTTONS: CameraPreset[] = ["white", "black", "top", "cinematic"];
 
 export function Hud({
   snapshot,
+  locale,
   muted,
   fps,
   onNewGame,
   onUndo,
   onResign,
   onToggleSound,
+  onToggleLocale,
   onFullscreen,
   onSettings,
   onCamera,
@@ -110,316 +133,102 @@ export function Hud({
   arena,
   onArena,
   onPreviewMove,
-  onTogglePause,
-  onDemoSpeed,
-  onDemoLoop,
-  onDemoRestart,
-  showcaseCamera,
-  onShowcaseCamera,
-  onToggleCinema,
 }: HudProps) {
+  const copy = COPY[locale];
   const [chronicleOpen, setChronicleOpen] = useState(false);
-  const [cameraMenuOpen, setCameraMenuOpen] = useState(false);
-  const [transportOpen, setTransportOpen] = useState(true);
-  const [activePreset, setActivePreset] = useState<CameraPreset>(() =>
-    snapshot.mode === "ai" && snapshot.playerColor === "b" ? "black" : "white",
-  );
-  const cameraMenuRef = useRef<HTMLDivElement | null>(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const cameraRef = useRef<HTMLDivElement | null>(null);
   const chronicleRef = useRef<HTMLDivElement | null>(null);
 
-  // Dismiss the camera menu on outside taps / Escape without laying an
-  // invisible backdrop over the board (that would eat the next board click).
   useEffect(() => {
-    if (!cameraMenuOpen) return;
-    const onPointerDown = (event: PointerEvent): void => {
-      const node = cameraMenuRef.current;
-      if (node && !node.contains(event.target as Node)) setCameraMenuOpen(false);
+    if (!cameraOpen) return;
+    const close = (event: PointerEvent): void => {
+      if (cameraRef.current && !cameraRef.current.contains(event.target as Node)) setCameraOpen(false);
     };
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") setCameraMenuOpen(false);
-    };
-    window.addEventListener("pointerdown", onPointerDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("pointerdown", onPointerDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [cameraMenuOpen]);
+    window.addEventListener("pointerdown", close);
+    return () => window.removeEventListener("pointerdown", close);
+  }, [cameraOpen]);
 
-  // The chronicle is a corner button by default so the board keeps the whole
-  // screen. Escape closes it anywhere; on narrow screens the open panel covers
-  // a good part of the board, so a tap outside folds it back down as well.
-  useEffect(() => {
-    if (!chronicleOpen) return;
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") setChronicleOpen(false);
-    };
-    const onPointerDown = (event: PointerEvent): void => {
-      if (window.innerWidth >= 1024) return;
-      const node = chronicleRef.current;
-      if (node && !node.contains(event.target as Node)) setChronicleOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("pointerdown", onPointerDown);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("pointerdown", onPointerDown);
-    };
-  }, [chronicleOpen]);
-
-  // "H" toggles the record without reaching for the corner.
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key !== "h" && event.key !== "H") return;
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
-      const target = event.target as HTMLElement | null;
-      const typing = target ? /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || target.isContentEditable : false;
-      if (typing) return;
-      setChronicleOpen((open) => !open);
+      if (event.key === "Escape") {
+        setCameraOpen(false);
+        setChronicleOpen(false);
+      }
+      if ((event.key === "h" || event.key === "H") && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        setChronicleOpen((open) => !open);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const pickCamera = (preset: CameraPreset): void => {
-    setActivePreset(preset);
-    setCameraMenuOpen(false);
-    onCamera(preset);
-  };
-
-  const demo = snapshot.demo;
-  const whiteTaken = snapshot.captured.filter((piece) => piece.color === "b");
-  const blackTaken = snapshot.captured.filter((piece) => piece.color === "w");
+  const redLosses = snapshot.captured.filter((piece) => piece.color === "w").map((piece) => piece.kind);
+  const blackLosses = snapshot.captured.filter((piece) => piece.color === "b").map((piece) => piece.kind);
   const diff = snapshot.materialDiff;
-
-  const ledger = (
-    <MoveLedger
-      moves={snapshot.moves}
-      pgn={snapshot.pgn}
-      result={snapshot.result}
-      turn={snapshot.turn}
-      thinking={snapshot.thinking}
-      playing={snapshot.status === "playing"}
-      onPreview={onPreviewMove}
-    />
-  );
-
-  const spoils = (
-    <div className="mc-slate mc-goldleaf px-4 py-3">
-      <div className="flex items-center justify-between">
-        <p className="mc-display text-[0.6rem] tracking-[0.34em] text-[#a89268]">Spoils</p>
-        <span className="mc-display text-[0.72rem] text-[#e2c98f]">
-          {diff === 0 ? "even" : diff > 0 ? `ivory +${diff}` : `obsidian +${-diff}`}
-        </span>
-      </div>
-      <div className="mt-2 space-y-1.5">
-        <CapturedRow label="w" pieces={whiteTaken.map((piece) => piece.kind)} />
-        <CapturedRow label="b" pieces={blackTaken.map((piece) => piece.kind)} />
-      </div>
-    </div>
-  );
+  const status = snapshot.status === "over"
+    ? copy.ended
+    : snapshot.thinking
+      ? copy.thinking
+      : copy.toMove;
+  const side = snapshot.turn === "w" ? copy.red : copy.black;
 
   return (
     <>
-      {/* Top bar */}
       <div className="pointer-events-none absolute inset-x-0 top-0 flex items-start justify-between gap-3 p-3 sm:p-4">
         <div className="mc-slate mc-goldleaf pointer-events-auto flex items-center gap-3 px-3 py-2.5">
           <Crest faction={snapshot.turn} size={26} active />
           <div>
-            <p className="mc-display text-[0.58rem] tracking-[0.3em] text-[#a89268]">
-              {demo
-                ? `Showcase · duel ${snapshot.demoRound}`
-                : snapshot.status === "over"
-                  ? "Battle ended"
-                  : snapshot.thinking
-                    ? "Council of war"
-                    : "To move"}
-            </p>
-            <p className="mc-display text-sm text-[#f2e2bd]">
-              {snapshot.status === "over"
-                ? "—"
-                : snapshot.thinking
-                  ? "Thinking…"
-                  : snapshot.turn === "w"
-                    ? "Ivory"
-                    : "Obsidian"}
-            </p>
+            <p className="mc-display text-[0.58rem] tracking-[0.28em] text-[#a89268]">{status}</p>
+            <p className="mc-display text-sm text-[#f2e2bd]">{snapshot.status === "over" ? "—" : side}</p>
           </div>
           {snapshot.inCheck && snapshot.status === "playing" ? (
-            <span className="mc-danger-flash mc-display rounded-sm border border-[#a8342a] px-2 py-1 text-[0.6rem] tracking-[0.24em] text-[#ff9a8a]">
-              CHECK
+            <span className="mc-danger-flash mc-display rounded-sm border border-[#a8342a] px-2 py-1 text-[0.6rem] tracking-[0.2em] text-[#ff9a8a]">
+              {copy.check}
             </span>
           ) : null}
-          {snapshot.thinking ? (
-            <span className="mc-pulse ml-1 h-2 w-2 rounded-full bg-[#d8b163]" aria-hidden="true" />
-          ) : null}
+          {snapshot.thinking ? <span className="mc-pulse ml-1 h-2 w-2 rounded-full bg-[#d8b163]" /> : null}
         </div>
 
         <div className="pointer-events-auto flex flex-wrap items-center justify-end gap-1.5">
-          {snapshot.clock.enabled ? (
-            <div className="mc-slate flex items-center gap-3 px-3 py-1.5">
-              <ClockFace
-                ms={snapshot.clock.whiteMs}
-                initial={snapshot.clock.initialMs}
-                active={snapshot.turn === "w" && snapshot.status === "playing"}
-                faction="w"
-              />
-              <div className="h-6 w-px bg-[#8a652244]" />
-              <ClockFace
-                ms={snapshot.clock.blackMs}
-                initial={snapshot.clock.initialMs}
-                active={snapshot.turn === "b" && snapshot.status === "playing"}
-                faction="b"
-              />
-            </div>
-          ) : null}
-
-          {demo ? (
-            <IconButton
-              label="Clean capture"
-              hint="Hide the whole interface for recording — the board only."
-              keys="C"
-              onClick={onToggleCinema}
-            >
-              <EyeOff size={16} />
-            </IconButton>
-          ) : (
-            <>
-              <IconButton
-                label="Take back"
-                hint={
-                  snapshot.canUndo
-                    ? "Undo your last move and the reply to it."
-                    : "Nothing to take back yet."
-                }
-                onClick={onUndo}
-                disabled={!snapshot.canUndo}
-              >
-                <RotateCcw size={16} />
-              </IconButton>
-              <IconButton
-                label="Resign"
-                hint={
-                  snapshot.status === "playing"
-                    ? "Concede the battle — your opponent wins at once."
-                    : "The battle is already over."
-                }
-                onClick={onResign}
-                disabled={snapshot.status !== "playing"}
-                danger
-              >
-                <Flag size={16} />
-              </IconButton>
-            </>
-          )}
-          <IconButton label="New duel" hint="Abandon this battle and set the board again." onClick={onNewGame}>
+          <IconButton label={copy.undo} hint={copy.undoHint} onClick={onUndo} disabled={!snapshot.canUndo}>
+            <RotateCcw size={16} />
+          </IconButton>
+          <IconButton label={copy.resign} hint={copy.resignHint} onClick={onResign} disabled={snapshot.status !== "playing"} danger>
+            <Flag size={16} />
+          </IconButton>
+          <IconButton label={copy.newGame} hint={copy.newGameHint} onClick={onNewGame}>
             <Swords size={16} />
           </IconButton>
-          <IconButton
-            label={muted ? "Sound off" : "Sound on"}
-            hint={muted ? "Bring back the score, strikes and footsteps." : "Silence the score and all battle sounds."}
-            onClick={onToggleSound}
-          >
+          <IconButton label={muted ? copy.soundOff : copy.soundOn} onClick={onToggleSound}>
             {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
           </IconButton>
-          <IconButton label="Fullscreen" hint="Fill the whole screen with the hall." onClick={onFullscreen}>
-            <Maximize size={16} />
-          </IconButton>
-          <IconButton
-            label="Flip sides"
-            hint="Swing the camera 180° to watch from the opposite end."
-            keys="F"
-            onClick={onFlipCamera}
-            active={cameraFlipped}
-          >
-            <Repeat size={16} />
-          </IconButton>
-          <IconButton
-            label={tactical ? "Back to 3D" : "Tactical map"}
-            hint={
-              tactical
-                ? "Return to the 3D hall with the figures."
-                : "Flat overhead board — read every square at a glance."
-            }
-            keys="T"
-            onClick={onToggleTactical}
-            active={tactical}
-          >
+          <IconButton label={copy.fullscreen} onClick={onFullscreen}><Maximize size={16} /></IconButton>
+          <IconButton label={copy.flip} onClick={onFlipCamera} active={cameraFlipped}><Repeat size={16} /></IconButton>
+          <IconButton label={tactical ? copy.back3d : copy.tactical} onClick={onToggleTactical} active={tactical}>
             {tactical ? <Box size={16} /> : <LayoutGrid size={16} />}
           </IconButton>
 
-          {/* Camera views live in a dropdown so nothing floats over the board */}
-          <div className="relative" ref={cameraMenuRef}>
-            <IconButton
-              label="Camera & arena"
-              hint="Choose a viewpoint and the hall it is fought in."
-              onClick={() => setCameraMenuOpen((open) => !open)}
-              active={cameraMenuOpen}
-            >
+          <div className="relative" ref={cameraRef}>
+            <IconButton label={copy.camera} onClick={() => setCameraOpen((open) => !open)} active={cameraOpen}>
               <Video size={16} />
             </IconButton>
-            {cameraMenuOpen ? (
-              <div className="mc-cam-menu mc-slate absolute right-0 top-[calc(100%+0.4rem)] z-30 w-44 p-2">
-                <p className="mc-display px-1 pb-1.5 text-[0.52rem] tracking-[0.3em] text-[#a89268]">Camera</p>
-                <div className="flex flex-col gap-1">
-                  {CAMERA_BUTTONS.map((button) => (
-                    <button
-                      key={button.key}
-                      type="button"
-                      className="mc-chip w-full text-left"
-                      data-active={!tactical && activePreset === button.key}
-                      onClick={() => pickCamera(button.key)}
-                    >
-                      {button.label}
+            {cameraOpen ? (
+              <div className="mc-slate mc-goldleaf mc-fade absolute right-0 top-[calc(100%+0.5rem)] z-30 w-64 p-3">
+                <p className="mc-display mb-2 text-[0.58rem] tracking-[0.26em] text-[#a89268]">{copy.camera}</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {CAMERA_BUTTONS.map((preset) => (
+                    <button key={preset} type="button" className="mc-chip flex items-center justify-center gap-2 py-2" onClick={() => { onCamera(preset); setCameraOpen(false); }}>
+                      <Camera size={13} /> {copy.cameras[preset]}
                     </button>
                   ))}
-                  <button
-                    type="button"
-                    className="mc-chip flex w-full items-center gap-1.5 text-left"
-                    data-active={tactical}
-                    onClick={() => {
-                      setCameraMenuOpen(false);
-                      onToggleTactical();
-                    }}
-                    title="Flat overhead map — no figures in the way (T)"
-                    aria-pressed={tactical}
-                  >
-                    <LayoutGrid size={13} />
-                    Tactical 2D
-                  </button>
-                  <div className="mc-rule my-1 opacity-60" />
-                  <button
-                    type="button"
-                    className="mc-chip mc-chip-flip flex w-full items-center gap-1.5"
-                    data-active={cameraFlipped}
-                    onClick={onFlipCamera}
-                    title="Swing the camera to the opposite side (F)"
-                    aria-pressed={cameraFlipped}
-                  >
-                    <Repeat
-                      size={13}
-                      className="mc-flip-icon"
-                      style={{ transform: cameraFlipped ? "rotate(180deg)" : "none" }}
-                    />
-                    Flip 180°
-                  </button>
                 </div>
-
-                <p className="mc-display px-1 pb-1.5 pt-3 text-[0.52rem] tracking-[0.3em] text-[#a89268]">
-                  Battleground
-                </p>
-                <div className="flex flex-col gap-1">
+                <div className="mc-rule my-3" />
+                <div className="grid grid-cols-4 gap-1.5">
                   {ARENA_ORDER.map((theme) => (
-                    <button
-                      key={theme}
-                      type="button"
-                      className="mc-chip flex w-full items-center gap-2 text-left"
-                      data-active={arena === theme}
-                      onClick={() => onArena(theme)}
-                      title={ARENA_LOOKS[theme].note}
-                    >
-                      <span className="mc-arena-dot" data-arena={theme} />
-                      {ARENA_LOOKS[theme].label}
+                    <button key={theme} type="button" className="mc-arena-card" data-active={arena === theme} onClick={() => onArena(theme)}>
+                      <span className="mc-arena-swatch" data-arena={theme} />
+                      <span className="text-[0.58rem] text-[#e8d6b1]">{copy.arenas[theme]}</span>
                     </button>
                   ))}
                 </div>
@@ -427,275 +236,76 @@ export function Hud({
             ) : null}
           </div>
 
-          <IconButton
-            label="Settings"
-            hint="Graphics, sound, clocks and opponent strength."
-            onClick={onSettings}
-          >
-            <SettingsIcon size={16} />
+          <IconButton label={copy.ledger} onClick={() => setChronicleOpen((open) => !open)} active={chronicleOpen}>
+            <ScrollText size={16} />
           </IconButton>
+          <IconButton label={copy.settings} onClick={onSettings}><SettingsIcon size={16} /></IconButton>
+          <IconButton label={locale === "zh-CN" ? "English" : "中文"} onClick={onToggleLocale}><Languages size={16} /></IconButton>
         </div>
       </div>
 
-      {/* Spoils tucks under the top bar on desktop — it is short and clear of
-          the board. */}
-      <div className="mc-rise pointer-events-auto absolute right-4 top-24 hidden w-56 lg:block xl:w-60">{spoils}</div>
-
-      {/* Chronicle: a small corner sigil that unfurls the record on demand. The
-          wrapper stays click-through so the board keeps every tap that is not
-          aimed at the button or the open panel. */}
-      <div
-        ref={chronicleRef}
-        className="pointer-events-none absolute bottom-0 left-0 z-30 flex flex-col items-start gap-2 p-3 sm:p-4"
-      >
-        {chronicleOpen ? (
-          <div className="mc-chronicle-panel pointer-events-auto flex h-[min(56vh,460px)] w-[min(84vw,18.5rem)] flex-col gap-2 lg:w-64">
-            <div className="min-h-0 flex-1">{ledger}</div>
-            <div className="lg:hidden">{spoils}</div>
+      <div className="pointer-events-none absolute bottom-3 left-3 sm:bottom-4 sm:left-4">
+        <div className="mc-slate mc-goldleaf pointer-events-auto min-w-64 px-4 py-3">
+          <div className="flex items-center justify-between gap-4">
+            <p className="mc-display text-[0.6rem] tracking-[0.28em] text-[#a89268]">{copy.losses}</p>
+            <span className="mc-display text-[0.68rem] text-[#e2c98f]">
+              {diff === 0 ? copy.even : diff > 0 ? `${copy.redAhead} +${Math.round(diff)}` : `${copy.blackAhead} +${Math.round(-diff)}`}
+            </span>
           </div>
-        ) : null}
-
-        <Tooltip
-          label={chronicleOpen ? "Close the chronicle" : "Chronicle"}
-          hint={chronicleOpen ? "Fold the record back into the corner." : "The full move record and the spoils taken."}
-          keys="H"
-          side="top"
-        >
-          <button
-            type="button"
-            className="mc-chronicle-fab pointer-events-auto"
-            data-open={chronicleOpen || undefined}
-            onClick={() => setChronicleOpen((open) => !open)}
-            aria-label="Toggle the move chronicle"
-            aria-expanded={chronicleOpen}
-          >
-            {chronicleOpen ? <X size={16} /> : <ScrollText size={16} />}
-            {!chronicleOpen && snapshot.moves.length > 0 ? (
-              <span key={snapshot.moves.length} className="mc-chronicle-badge">
-                {snapshot.moves.length}
-              </span>
-            ) : null}
-          </button>
-        </Tooltip>
+          <div className="mt-2 space-y-1.5">
+            <CapturedRow label={copy.redLost} faction="w" pieces={redLosses} />
+            <CapturedRow label={copy.blackLost} faction="b" pieces={blackLosses} />
+          </div>
+          {fps > 0 ? <p className="mt-2 text-right text-[0.58rem] tracking-wide text-[#6d6149]">{fps} FPS</p> : null}
+        </div>
       </div>
 
-      {/* Showcase transport — a slim rail tucked into the bottom-right corner,
-          icon-only, and foldable down to a single sigil so the board is never
-          covered. */}
-      {demo ? (
-        <div className="mc-demo-dock pointer-events-auto">
-          {transportOpen ? (
-            <div className="mc-demo-bar">
-              <Tooltip
-                label={snapshot.paused ? "Resume" : "Pause"}
-                hint={snapshot.paused ? "Let the duel play on." : "Freeze the duel where it stands."}
-                keys="Space"
-                side="top"
-              >
-                <button
-                  type="button"
-                  className="mc-demo-play"
-                  data-paused={snapshot.paused || undefined}
-                  onClick={onTogglePause}
-                  aria-label={snapshot.paused ? "Resume the showcase" : "Pause the showcase"}
-                >
-                  {snapshot.paused ? <Play size={13} /> : <Pause size={13} />}
-                </button>
-              </Tooltip>
-
-              <div className="mc-demo-sep" />
-
-              <div className="flex items-center gap-[0.15rem]">
-                {DEMO_SPEEDS.map((option) => (
-                  <Tooltip key={option.label} label={`Speed ${option.label}`} hint="How fast the duel plays." side="top">
-                    <button
-                      type="button"
-                      className="mc-chip mc-demo-speed"
-                      data-active={demo.speed === option.value}
-                      onClick={() => onDemoSpeed(option.value)}
-                    >
-                      {option.label}
-                    </button>
-                  </Tooltip>
-                ))}
-              </div>
-
-              <div className="mc-demo-sep" />
-
-              {/* Camera behaviour: the duel is watched, so how it is shot matters
-                  as much as how fast it is played. Icons only — the label lives
-                  in the tooltip. */}
-              <div className="flex items-center gap-[0.15rem]">
-                {SHOWCASE_CAMERAS.map((option) => {
-                  const Icon = option.icon;
-                  return (
-                    <Tooltip key={option.key} label={`Camera: ${option.label}`} hint={option.hint} side="top">
-                      <button
-                        type="button"
-                        className="mc-chip mc-demo-icon"
-                        data-active={showcaseCamera === option.key}
-                        onClick={() => onShowcaseCamera(option.key)}
-                        aria-label={`Camera: ${option.label}`}
-                        aria-pressed={showcaseCamera === option.key}
-                      >
-                        <Icon size={13} />
-                      </button>
-                    </Tooltip>
-                  );
-                })}
-              </div>
-
-              <div className="mc-demo-sep" />
-
-              <Tooltip label="Loop" hint="Start a fresh duel automatically when this one ends." side="top">
-                <button
-                  type="button"
-                  className="mc-chip mc-demo-icon"
-                  data-active={demo.autoRematch}
-                  onClick={() => onDemoLoop(!demo.autoRematch)}
-                  aria-label="Loop duels"
-                  aria-pressed={demo.autoRematch}
-                >
-                  <Repeat size={13} />
-                </button>
-              </Tooltip>
-              <Tooltip
-                label="New duel"
-                hint={`Reset the board — ${DIFFICULTY_SHORT[demo.white] ?? demo.white} vs ${
-                  DIFFICULTY_SHORT[demo.black] ?? demo.black
-                }.`}
-                side="top"
-              >
-                <button
-                  type="button"
-                  className="mc-chip mc-demo-icon"
-                  onClick={onDemoRestart}
-                  aria-label="Restart the duel"
-                >
-                  <RotateCw size={13} />
-                </button>
-              </Tooltip>
-
-              <Tooltip label="Hide controls" hint="Fold the rail down to a single sigil." side="left">
-                <button
-                  type="button"
-                  className="mc-demo-fold"
-                  onClick={() => setTransportOpen(false)}
-                  aria-label="Hide the showcase transport"
-                >
-                  <ChevronRight size={13} />
-                </button>
-              </Tooltip>
-            </div>
-          ) : (
-            <Tooltip
-              label="Showcase controls"
-              hint={`${DIFFICULTY_SHORT[demo.white] ?? demo.white} vs ${
-                DIFFICULTY_SHORT[demo.black] ?? demo.black
-              }${snapshot.paused ? " — paused" : ""}. Speed, camera and loop.`}
-              side="top"
-            >
-              <button
-                type="button"
-                className="mc-demo-tab"
-                data-paused={snapshot.paused || undefined}
-                onClick={() => setTransportOpen(true)}
-                aria-label="Show the showcase transport"
-              >
-                <Clapperboard size={14} />
-              </button>
-            </Tooltip>
-          )}
-
-          {snapshot.paused ? <span className="mc-demo-flag mc-pulse">PAUSED</span> : null}
-          {snapshot.status === "over" && demo.autoRematch ? (
-            <span className="mc-demo-flag mc-pulse">NEXT DUEL…</span>
-          ) : null}
+      {chronicleOpen ? (
+        <div ref={chronicleRef} className="pointer-events-auto absolute bottom-3 right-3 top-20 z-20 w-[min(24rem,calc(100vw-1.5rem))] sm:bottom-4 sm:right-4">
+          <button type="button" className="mc-btn mc-icon-btn absolute right-2 top-2 z-10" onClick={() => setChronicleOpen(false)} aria-label="Close">
+            <X size={14} />
+          </button>
+          <MoveLedger
+            locale={locale}
+            moves={snapshot.moves}
+            pgn={snapshot.pgn}
+            result={snapshot.result}
+            turn={snapshot.turn}
+            thinking={snapshot.thinking}
+            playing={snapshot.status === "playing"}
+            onPreview={onPreviewMove}
+          />
         </div>
-      ) : null}
-
-      {fps > 0 ? (
-        <span className="pointer-events-none absolute bottom-2 right-3 hidden text-[0.62rem] tracking-widest text-[#5f5747] lg:block">
-          {fps} FPS
-        </span>
       ) : null}
     </>
   );
 }
 
-function CapturedRow({ label, pieces }: { label: "w" | "b"; pieces: PieceKind[] }) {
+function CapturedRow({ label, faction, pieces }: { label: string; faction: "w" | "b"; pieces: PieceKind[] }) {
   return (
-    <div className="flex items-center gap-2">
-      <Crest faction={label} size={14} />
-      <div className="flex flex-wrap gap-0.5 text-lg leading-none" style={{ color: label === "w" ? "#f0e3c6" : "#b9838a" }}>
-        {pieces.length === 0 ? <span className="text-xs italic text-[#7d6f57]">—</span> : null}
-        {pieces.map((kind, index) => (
-          <span key={`${kind}-${index}`}>{pieceGlyph(kind)}</span>
-        ))}
-      </div>
+    <div className="flex min-h-5 items-center gap-2">
+      <Crest faction={faction} size={14} />
+      <span className="w-16 text-[0.62rem] text-[#8f7f64]">{label}</span>
+      <span className="flex flex-wrap gap-1 text-sm text-[#e4d1aa]">
+        {pieces.length === 0 ? <i className="text-[0.62rem] text-[#665c4b]">—</i> : pieces.map((kind, index) => <span key={`${kind}-${index}`}>{pieceGlyph(kind)}</span>)}
+      </span>
     </div>
   );
 }
 
-function ClockFace({
-  ms,
-  initial,
-  active,
-  faction,
-}: {
-  ms: number;
-  initial: number;
-  active: boolean;
-  faction: "w" | "b";
-}) {
-  const urgent = ms < 30_000;
+function IconButton({ children, label, hint, onClick, disabled, active, danger }: { children: ReactNode; label: string; hint?: string; onClick: () => void; disabled?: boolean; active?: boolean; danger?: boolean }) {
   return (
-    <div className="flex items-center gap-1.5" style={{ opacity: active ? 1 : 0.55 }}>
-      <Hourglass ratio={initial > 0 ? ms / initial : 0} urgent={urgent} />
-      <div>
-        <p className="mc-display text-[0.5rem] tracking-[0.2em] text-[#a89268]">{faction === "w" ? "IVORY" : "OBSIDIAN"}</p>
-        <p className={`mc-display text-sm ${urgent ? "text-[#ff8f7d]" : "text-[#f2e2bd]"}`}>{formatClock(ms)}</p>
-      </div>
-    </div>
-  );
-}
-
-function IconButton({
-  children,
-  label,
-  hint,
-  keys,
-  side = "bottom",
-  onClick,
-  disabled,
-  danger,
-  active,
-}: {
-  children: React.ReactNode;
-  /** Short name shown on the tooltip's first line and read by screen readers. */
-  label: string;
-  /** One sentence explaining what the control does. */
-  hint?: string;
-  /** Keyboard shortcut, rendered as a key cap. */
-  keys?: string;
-  side?: TooltipSide;
-  onClick: () => void;
-  disabled?: boolean;
-  danger?: boolean;
-  active?: boolean;
-}) {
-  return (
-    <Tooltip label={label} hint={hint} keys={keys} side={side}>
-      <button
-        type="button"
-        aria-label={label}
-        onClick={onClick}
-        disabled={disabled}
-        data-active={active ? "true" : undefined}
-        className={`mc-btn mc-icon-btn ${danger ? "mc-btn-danger" : ""}`}
-      >
-        {children}
-      </button>
-    </Tooltip>
+    <button
+      type="button"
+      className="mc-btn mc-icon-btn"
+      data-active={active || undefined}
+      data-danger={danger || undefined}
+      title={hint ? `${label} · ${hint}` : label}
+      aria-label={label}
+      onClick={onClick}
+      disabled={disabled}
+    >
+      {children}
+    </button>
   );
 }
