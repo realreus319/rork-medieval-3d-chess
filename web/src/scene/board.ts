@@ -2,26 +2,11 @@ import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 
 import type { SquareId } from "../core/types";
+import { XIANGQI_COLS, XIANGQI_FILES, XIANGQI_ROWS, squareToPosition } from "../xiangqi/coordinates";
 import type { ArenaLook } from "./arena";
-import {
-  boardBorderTexture,
-  captureMarkerTexture,
-  castleMarkerTexture,
-  columnTexture,
-  marbleTexture,
-  moveMarkerTexture,
-  promoteMarkerTexture,
-  landingRingTexture,
-  radialTexture,
-  selectMarkerTexture,
-  shockwaveTexture,
-  tileMaskTexture,
-} from "./textures";
 
 export const TILE = 1.02;
 export const BOARD_TOP = 0;
-
-const FILES = "abcdefgh";
 
 export type HighlightKind =
   | "select"
@@ -44,249 +29,132 @@ const HIGHLIGHT_COLORS: Record<HighlightKind, number> = {
   hint: 0x6aa9ff,
 };
 
-/** How dark an unreachable square goes while a piece is selected. */
-const SHROUD_OPACITY = 0.62;
-
-/** Base opacity of the soft glow disc lying flat on the tile. */
-const GLOW_OPACITY: Record<HighlightKind, number> = {
-  select: 0.5,
-  move: 0.46,
-  capture: 0.58,
-  castle: 0.5,
-  promote: 0.54,
-  last: 0.22,
-  check: 0.6,
-  hint: 0.3,
-};
-
-/** Base opacity of the crisp reticle drawn on top of the glow. */
-const MARKER_OPACITY: Record<HighlightKind, number> = {
-  select: 0.85,
-  move: 0.9,
-  capture: 1,
-  castle: 0.95,
-  promote: 1,
-  last: 0,
-  check: 0.8,
-  hint: 0.5,
-};
-
-/** Base opacity of the vertical light column standing on the square. */
-const BEAM_OPACITY: Record<HighlightKind, number> = {
-  select: 0.16,
-  move: 0.3,
-  capture: 0.42,
-  castle: 0.34,
-  promote: 0.46,
-  last: 0,
-  check: 0.3,
-  hint: 0.12,
-};
-
-/** Radians per second the reticle spins (capture locks turn the other way). */
-const MARKER_SPIN: Record<HighlightKind, number> = {
-  select: 0,
-  move: 0.35,
-  capture: -0.7,
-  castle: 0.5,
-  promote: 0.9,
-  last: 0,
-  check: 0.5,
-  hint: 0.2,
-};
-
-const POP_DURATION = 0.26;
-
-/** Overshooting ease so squares snap into place with a little punch. */
-function easeOutBack(t: number): number {
-  const c = 1.9;
-  const p = t - 1;
-  return 1 + (c + 1) * p * p * p + c * p * p;
-}
-
-export function squareToWorld(square: SquareId, y = BOARD_TOP): THREE.Vector3 {
-  const file = FILES.indexOf(square[0]);
-  const rank = Number(square[1]);
-  return new THREE.Vector3((file - 3.5) * TILE, y, (3.5 - (rank - 1)) * TILE);
-}
-
-export function worldToSquare(x: number, z: number): SquareId | null {
-  const file = Math.round(x / TILE + 3.5);
-  const rank = Math.round(3.5 - z / TILE) + 1;
-  if (file < 0 || file > 7 || rank < 1 || rank > 8) return null;
-  return `${FILES[file]}${rank}`;
-}
-
-export function isLightSquare(square: SquareId): boolean {
-  const file = FILES.indexOf(square[0]);
-  const rank = Number(square[1]);
-  return (file + rank) % 2 === 0;
-}
-
-/** A tile knocked out of place by an impact, settling back with damped bounce. */
-interface TileJolt {
-  tile: THREE.Mesh;
-  home: THREE.Vector3;
-  /** Seconds elapsed; negative while the shock travels out to this tile. */
+interface HighlightSlot {
+  ring: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
+  glow: THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
+  beam: THREE.Mesh<THREE.CylinderGeometry, THREE.MeshBasicMaterial>;
+  kind: HighlightKind | null;
   age: number;
-  strength: number;
-  duration: number;
-  seed: number;
+  delay: number;
+  pulse: boolean;
 }
 
-/** One pooled shockwave ring / flare pair playing on a square. */
-interface ImpactWave {
-  ring: THREE.Mesh;
-  ringMaterial: THREE.MeshBasicMaterial;
-  flare: THREE.Mesh;
-  flareMaterial: THREE.MeshBasicMaterial;
-  age: number;
-  duration: number;
-  active: boolean;
-}
-
-/** Arrival ripple on the square a figure just set down on. */
-interface LandingRipple {
-  ring: THREE.Mesh;
-  ringMaterial: THREE.MeshBasicMaterial;
-  glow: THREE.Mesh;
-  glowMaterial: THREE.MeshBasicMaterial;
-  age: number;
-  duration: number;
-  strength: number;
-  active: boolean;
-}
-
-/** A dark veil laid over a square the selected piece cannot reach. */
 interface ShroudSlot {
-  mesh: THREE.Mesh;
-  material: THREE.MeshBasicMaterial;
-  target: number;
+  mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
   current: number;
-  /** Seconds still to wait before this square starts fading. */
+  target: number;
   delay: number;
 }
 
-interface HighlightSlot {
-  glow: THREE.Mesh;
-  glowMaterial: THREE.MeshBasicMaterial;
-  marker: THREE.Mesh;
-  markerMaterial: THREE.MeshBasicMaterial;
-  beam: THREE.Mesh;
-  beamMaterial: THREE.MeshBasicMaterial;
-  kind: HighlightKind | null;
-  pulse: boolean;
-  /** Seconds since the highlight was set; negative while waiting on its stagger. */
+interface TileMotion {
+  mesh: THREE.Mesh;
+  home: THREE.Vector3;
   age: number;
+  duration: number;
+  strength: number;
   phase: number;
 }
 
-/**
- * The playing surface: 64 bevelled marble/basalt tiles on a carved base with a
- * bronze-trimmed, engraved border, plus the pooled highlight overlays.
- */
+interface TransientRing {
+  mesh: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
+  age: number;
+  duration: number;
+  strength: number;
+}
+
+const BOARD_WIDTH = (XIANGQI_COLS - 1) * TILE;
+const BOARD_DEPTH = (XIANGQI_ROWS - 1) * TILE;
+
+export function squareToWorld(square: SquareId, y = BOARD_TOP): THREE.Vector3 {
+  const position = squareToPosition(square);
+  if (!position) return new THREE.Vector3(0, y, 0);
+  return new THREE.Vector3(
+    (position.col - (XIANGQI_COLS - 1) / 2) * TILE,
+    y,
+    (position.row - (XIANGQI_ROWS - 1) / 2) * TILE,
+  );
+}
+
+export function worldToSquare(x: number, z: number): SquareId | null {
+  const col = Math.round(x / TILE + (XIANGQI_COLS - 1) / 2);
+  const row = Math.round(z / TILE + (XIANGQI_ROWS - 1) / 2);
+  if (col < 0 || col >= XIANGQI_COLS || row < 0 || row >= XIANGQI_ROWS) return null;
+  return `${XIANGQI_FILES[col]}${row + 1}`;
+}
+
+export function isLightSquare(square: SquareId): boolean {
+  const position = squareToPosition(square);
+  return position ? (position.col + position.row) % 2 === 0 : false;
+}
+
+function lineBetween(from: THREE.Vector3, to: THREE.Vector3, material: THREE.Material, thickness = 0.026): THREE.Mesh {
+  const length = from.distanceTo(to);
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(thickness, 0.018, length), material);
+  mesh.position.copy(from).add(to).multiplyScalar(0.5);
+  mesh.position.y = BOARD_TOP + 0.025;
+  mesh.lookAt(to.x, mesh.position.y, to.z);
+  return mesh;
+}
+
+function textTexture(text: string): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 160;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Canvas 2D context unavailable");
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.font = "700 88px 'Noto Serif SC', 'Songti SC', serif";
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillStyle = "rgba(63,36,18,0.92)";
+  context.fillText(text, canvas.width / 2, canvas.height / 2 + 4);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 4;
+  return texture;
+}
+
+/** 9x10 Xiangqi board using the original game's stone, bronze and pooled effects. */
 export class BoardView {
   readonly group = new THREE.Group();
   readonly tiles: THREE.Mesh[] = [];
 
-  private slots = new Map<SquareId, HighlightSlot>();
-  private shrouds = new Map<SquareId, ShroudSlot>();
-  private markerMaps: Record<HighlightKind, THREE.Texture | null> = {
-    select: null,
-    move: null,
-    capture: null,
-    castle: null,
-    promote: null,
-    last: null,
-    check: null,
-    hint: null,
-  };
-  private hoverRing: THREE.Mesh;
-  /** Materials the arena theme repaints (tile contrast, base stone, trim). */
   private lightTileMaterial: THREE.MeshPhysicalMaterial;
   private darkTileMaterial: THREE.MeshPhysicalMaterial;
-  private baseMaterial: THREE.MeshStandardMaterial | null = null;
-  private borderMaterial: THREE.MeshStandardMaterial | null = null;
-  private trimMaterial: THREE.MeshStandardMaterial | null = null;
+  private baseMaterial: THREE.MeshStandardMaterial;
+  private borderMaterial: THREE.MeshStandardMaterial;
+  private trimMaterial: THREE.MeshStandardMaterial;
+  private gridMaterial: THREE.MeshStandardMaterial;
+  private highlightSlots = new Map<SquareId, HighlightSlot>();
+  private shrouds = new Map<SquareId, ShroudSlot>();
+  private tileBySquare = new Map<SquareId, THREE.Mesh>();
+  private motions: TileMotion[] = [];
+  private transients: TransientRing[] = [];
+  private hoverRing: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
   private disposables: { dispose: () => void }[] = [];
   private elapsed = 0;
-  private tileBySquare = new Map<SquareId, THREE.Mesh>();
-  private jolts: TileJolt[] = [];
-  private waves: ImpactWave[] = [];
-  private waveCursor = 0;
-  private landings: LandingRipple[] = [];
-  private landingCursor = 0;
 
   constructor() {
-    this.group.name = "board";
-
-    const lightMap = this.track(marbleTexture(false));
-    const darkMap = this.track(marbleTexture(true));
-    const lightMaterial = this.track(
-      new THREE.MeshPhysicalMaterial({
-        map: lightMap,
-        color: 0xf6efe0,
-        roughness: 0.22,
-        metalness: 0.02,
-        clearcoat: 0.7,
-        clearcoatRoughness: 0.18,
-        envMapIntensity: 0.9,
-      }),
-    );
-    const darkMaterial = this.track(
-      new THREE.MeshPhysicalMaterial({
-        map: darkMap,
-        color: 0x23252c,
-        roughness: 0.3,
-        metalness: 0.12,
-        clearcoat: 0.6,
-        clearcoatRoughness: 0.25,
-        envMapIntensity: 0.8,
-      }),
-    );
-
-    this.lightTileMaterial = lightMaterial;
-    this.darkTileMaterial = darkMaterial;
-
-    const tileGeometry = this.track(new RoundedBoxGeometry(TILE * 0.97, 0.18, TILE * 0.97, 3, 0.035));
-
-    for (let rank = 1; rank <= 8; rank += 1) {
-      for (let fileIndex = 0; fileIndex < 8; fileIndex += 1) {
-        const square = `${FILES[fileIndex]}${rank}`;
-        const light = isLightSquare(square);
-        const tile = new THREE.Mesh(tileGeometry, light ? lightMaterial : darkMaterial);
-        const position = squareToWorld(square, -0.09);
-        tile.position.copy(position);
-        tile.receiveShadow = true;
-        tile.castShadow = false;
-        tile.userData.square = square;
-        tile.userData.home = position.clone();
-        this.tileBySquare.set(square, tile);
-        this.tiles.push(tile);
-        this.group.add(tile);
-      }
-    }
+    this.group.name = "xiangqi-board";
+    this.lightTileMaterial = this.track(new THREE.MeshPhysicalMaterial({ color: 0xd8c6a0, roughness: 0.28, metalness: 0.08, clearcoat: 0.55, clearcoatRoughness: 0.25, envMapIntensity: 0.9 }));
+    this.darkTileMaterial = this.track(new THREE.MeshPhysicalMaterial({ color: 0x4b3b2d, roughness: 0.38, metalness: 0.16, clearcoat: 0.35, clearcoatRoughness: 0.35, envMapIntensity: 0.75 }));
+    this.baseMaterial = this.track(new THREE.MeshStandardMaterial({ color: 0x3b342b, roughness: 0.72, metalness: 0.24 }));
+    this.borderMaterial = this.track(new THREE.MeshStandardMaterial({ color: 0xbfae8e, roughness: 0.5, metalness: 0.48, envMapIntensity: 1.1 }));
+    this.trimMaterial = this.track(new THREE.MeshStandardMaterial({ color: 0x8a6a33, roughness: 0.28, metalness: 0.95, emissive: 0x2a1a06, emissiveIntensity: 0.35, envMapIntensity: 1.4 }));
+    this.gridMaterial = this.track(new THREE.MeshStandardMaterial({ color: 0x3a2415, roughness: 0.62, metalness: 0.32, emissive: 0x160b04, emissiveIntensity: 0.14 }));
 
     this.buildBase();
-    this.buildShroud();
+    this.buildTiles();
+    this.buildGrid();
     this.buildHighlights();
-    this.buildImpactWaves();
-    this.buildLandingRipples();
+    this.buildShrouds();
 
-    const ringGeometry = this.track(new THREE.RingGeometry(TILE * 0.42, TILE * 0.48, 32));
-    const ringMaterial = this.track(
-      new THREE.MeshBasicMaterial({
-        color: 0xffd88a,
-        transparent: true,
-        opacity: 0,
-        depthWrite: false,
-        blending: THREE.AdditiveBlending,
-      }),
-    );
-    this.hoverRing = new THREE.Mesh(ringGeometry, ringMaterial);
+    const hoverMaterial = this.track(new THREE.MeshBasicMaterial({ color: 0xffd88a, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }));
+    this.hoverRing = new THREE.Mesh(this.track(new THREE.RingGeometry(TILE * 0.28, TILE * 0.38, 40)), hoverMaterial);
     this.hoverRing.rotation.x = -Math.PI / 2;
-    this.hoverRing.position.y = BOARD_TOP + 0.012;
-    this.hoverRing.renderOrder = 5;
+    this.hoverRing.position.y = BOARD_TOP + 0.035;
+    this.hoverRing.visible = false;
+    this.hoverRing.renderOrder = 8;
     this.group.add(this.hoverRing);
   }
 
@@ -296,573 +164,293 @@ export class BoardView {
   }
 
   private buildBase(): void {
-    const size = TILE * 8 + 1.5;
-    const geometry = this.track(new RoundedBoxGeometry(size, 0.62, size, 4, 0.09));
-    const stone = this.track(
-      new THREE.MeshStandardMaterial({ color: 0x3b342b, roughness: 0.72, metalness: 0.25 }),
+    const sizeX = BOARD_WIDTH + TILE * 1.65;
+    const sizeZ = BOARD_DEPTH + TILE * 1.65;
+    const base = new THREE.Mesh(
+      this.track(new RoundedBoxGeometry(sizeX, 0.64, sizeZ, 4, 0.1)),
+      [this.baseMaterial, this.baseMaterial, this.borderMaterial, this.baseMaterial, this.baseMaterial, this.baseMaterial],
     );
-    this.baseMaterial = stone;
-    const top = this.track(
-      new THREE.MeshStandardMaterial({
-        map: this.track(boardBorderTexture()),
-        color: 0xbfae8e,
-        roughness: 0.55,
-        metalness: 0.45,
-        envMapIntensity: 1.1,
-      }),
-    );
-    this.borderMaterial = top;
-    const materials = [stone, stone, top, stone, stone, stone];
-    const base = new THREE.Mesh(geometry, materials);
-    base.position.y = -0.42;
+    base.position.y = -0.43;
     base.castShadow = true;
     base.receiveShadow = true;
     this.group.add(base);
 
-    // Bronze trim: a thin torus-like frame catching bloom at grazing angles.
-    const trimGeometry = this.track(new RoundedBoxGeometry(size + 0.18, 0.14, size + 0.18, 3, 0.06));
-    const trim = this.track(
-      new THREE.MeshStandardMaterial({
-        color: 0x8a6a33,
-        roughness: 0.28,
-        metalness: 0.95,
-        emissive: 0x2a1a06,
-        emissiveIntensity: 0.4,
-        envMapIntensity: 1.4,
-      }),
-    );
-    this.trimMaterial = trim;
-    const trimMesh = new THREE.Mesh(trimGeometry, trim);
-    trimMesh.position.y = -0.7;
-    trimMesh.castShadow = true;
-    this.group.add(trimMesh);
+    const trim = new THREE.Mesh(this.track(new RoundedBoxGeometry(sizeX + 0.18, 0.14, sizeZ + 0.18, 3, 0.06)), this.trimMaterial);
+    trim.position.y = -0.71;
+    trim.castShadow = true;
+    this.group.add(trim);
+
+    const riverMaterial = this.track(new THREE.MeshPhysicalMaterial({ color: 0x8b6a42, roughness: 0.6, metalness: 0.1, clearcoat: 0.28 }));
+    const river = new THREE.Mesh(this.track(new RoundedBoxGeometry(BOARD_WIDTH + TILE * 0.74, 0.08, TILE * 0.74, 2, 0.04)), riverMaterial);
+    river.position.set(0, -0.035, 0);
+    river.receiveShadow = true;
+    this.group.add(river);
+    this.addRiverLabel("楚河", -2.25);
+    this.addRiverLabel("汉界", 2.25);
+  }
+
+  private addRiverLabel(text: string, x: number): void {
+    const texture = this.track(textTexture(text));
+    const material = this.track(new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false }));
+    const mesh = new THREE.Mesh(this.track(new THREE.PlaneGeometry(2.35, 0.72)), material);
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.set(x, BOARD_TOP + 0.017, 0);
+    mesh.renderOrder = 3;
+    this.group.add(mesh);
+  }
+
+  private buildTiles(): void {
+    const geometry = this.track(new RoundedBoxGeometry(TILE * 0.82, 0.18, TILE * 0.82, 3, 0.045));
+    for (let row = 0; row < XIANGQI_ROWS; row += 1) {
+      for (let col = 0; col < XIANGQI_COLS; col += 1) {
+        const square = `${XIANGQI_FILES[col]}${row + 1}`;
+        const tile = new THREE.Mesh(geometry, isLightSquare(square) ? this.lightTileMaterial : this.darkTileMaterial);
+        const home = squareToWorld(square, -0.09);
+        tile.position.copy(home);
+        tile.receiveShadow = true;
+        tile.userData.square = square;
+        tile.userData.home = home.clone();
+        this.tiles.push(tile);
+        this.tileBySquare.set(square, tile);
+        this.group.add(tile);
+      }
+    }
+  }
+
+  private addGridLine(from: SquareId, to: SquareId): void {
+    const line = lineBetween(squareToWorld(from), squareToWorld(to), this.gridMaterial);
+    this.disposables.push(line.geometry);
+    this.group.add(line);
+  }
+
+  private buildGrid(): void {
+    for (let row = 1; row <= XIANGQI_ROWS; row += 1) this.addGridLine(`a${row}`, `i${row}`);
+    for (let col = 0; col < XIANGQI_COLS; col += 1) {
+      const file = XIANGQI_FILES[col];
+      if (col === 0 || col === XIANGQI_COLS - 1) this.addGridLine(`${file}1`, `${file}10`);
+      else {
+        this.addGridLine(`${file}1`, `${file}5`);
+        this.addGridLine(`${file}6`, `${file}10`);
+      }
+    }
+    this.addGridLine("d1", "f3");
+    this.addGridLine("f1", "d3");
+    this.addGridLine("d8", "f10");
+    this.addGridLine("f8", "d10");
   }
 
   private buildHighlights(): void {
-    const glowGeometry = this.track(new THREE.PlaneGeometry(TILE * 0.98, TILE * 0.98));
-    const markerGeometry = this.track(new THREE.PlaneGeometry(TILE * 0.92, TILE * 0.92));
-    const beamGeometry = this.track(
-      new THREE.CylinderGeometry(TILE * 0.4, TILE * 0.44, 0.55, 20, 1, true),
-    );
-    const glowMap = this.track(radialTexture("rgba(255,255,255,0.95)", "rgba(255,255,255,0)"));
-    const beamMap = this.track(columnTexture());
-    this.markerMaps = {
-      select: this.track(selectMarkerTexture()),
-      move: this.track(moveMarkerTexture()),
-      capture: this.track(captureMarkerTexture()),
-      castle: this.track(castleMarkerTexture()),
-      promote: this.track(promoteMarkerTexture()),
-      check: this.track(captureMarkerTexture()),
-      hint: this.track(moveMarkerTexture()),
-      last: null,
-    };
+    const ringGeometry = this.track(new THREE.RingGeometry(TILE * 0.22, TILE * 0.37, 42));
+    const glowGeometry = this.track(new THREE.CircleGeometry(TILE * 0.4, 42));
+    const beamGeometry = this.track(new THREE.CylinderGeometry(TILE * 0.32, TILE * 0.38, 0.65, 24, 1, true));
+    for (let row = 0; row < XIANGQI_ROWS; row += 1) {
+      for (let col = 0; col < XIANGQI_COLS; col += 1) {
+        const square = `${XIANGQI_FILES[col]}${row + 1}`;
+        const ringMaterial = this.track(new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }));
+        const ring = new THREE.Mesh(ringGeometry, ringMaterial);
+        ring.rotation.x = -Math.PI / 2;
+        ring.position.copy(squareToWorld(square, BOARD_TOP + 0.045));
+        ring.visible = false;
+        ring.renderOrder = 7;
+        this.group.add(ring);
 
-    let index = 0;
-    for (let rank = 1; rank <= 8; rank += 1) {
-      for (let fileIndex = 0; fileIndex < 8; fileIndex += 1) {
-        const square = `${FILES[fileIndex]}${rank}`;
-
-        const glowMaterial = this.track(
-          new THREE.MeshBasicMaterial({
-            map: glowMap,
-            color: 0xffffff,
-            transparent: true,
-            opacity: 0,
-            depthWrite: false,
-            blending: THREE.AdditiveBlending,
-          }),
-        );
+        const glowMaterial = this.track(new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }));
         const glow = new THREE.Mesh(glowGeometry, glowMaterial);
         glow.rotation.x = -Math.PI / 2;
-        glow.position.copy(squareToWorld(square, BOARD_TOP + 0.008));
+        glow.position.copy(squareToWorld(square, BOARD_TOP + 0.028));
         glow.visible = false;
-        glow.renderOrder = 2;
+        glow.renderOrder = 5;
         this.group.add(glow);
 
-        const markerMaterial = this.track(
-          new THREE.MeshBasicMaterial({
-            color: 0xffffff,
-            transparent: true,
-            opacity: 0,
-            depthWrite: false,
-            blending: THREE.AdditiveBlending,
-          }),
-        );
-        const marker = new THREE.Mesh(markerGeometry, markerMaterial);
-        marker.rotation.x = -Math.PI / 2;
-        marker.position.copy(squareToWorld(square, BOARD_TOP + 0.016));
-        marker.visible = false;
-        marker.renderOrder = 4;
-        this.group.add(marker);
-
-        const beamMaterial = this.track(
-          new THREE.MeshBasicMaterial({
-            map: beamMap,
-            color: 0xffffff,
-            transparent: true,
-            opacity: 0,
-            depthWrite: false,
-            side: THREE.DoubleSide,
-            blending: THREE.AdditiveBlending,
-          }),
-        );
+        const beamMaterial = this.track(new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }));
         const beam = new THREE.Mesh(beamGeometry, beamMaterial);
-        beam.position.copy(squareToWorld(square, BOARD_TOP + 0.275));
+        beam.position.copy(squareToWorld(square, BOARD_TOP + 0.34));
         beam.visible = false;
-        beam.renderOrder = 3;
+        beam.renderOrder = 6;
         this.group.add(beam);
-
-        this.slots.set(square, {
-          glow,
-          glowMaterial,
-          marker,
-          markerMaterial,
-          beam,
-          beamMaterial,
-          kind: null,
-          pulse: false,
-          age: 0,
-          phase: (index % 7) * 0.42,
-        });
-        index += 1;
+        this.highlightSlots.set(square, { ring, glow, beam, kind: null, age: 0, delay: 0, pulse: false });
       }
     }
   }
 
-  /**
-   * One dark veil per square, sitting just above the stone. While a piece is
-   * selected every square it cannot reach is dimmed, so the lit destinations
-   * read instantly instead of competing with 64 evenly-lit tiles.
-   */
-  private buildShroud(): void {
-    const geometry = this.track(new THREE.PlaneGeometry(TILE * 1.01, TILE * 1.01));
-    const map = this.track(tileMaskTexture());
-
-    for (let rank = 1; rank <= 8; rank += 1) {
-      for (let fileIndex = 0; fileIndex < 8; fileIndex += 1) {
-        const square = `${FILES[fileIndex]}${rank}`;
-        const material = this.track(
-          new THREE.MeshBasicMaterial({
-            map,
-            color: 0x05070e,
-            transparent: true,
-            opacity: 0,
-            depthWrite: false,
-          }),
-        );
+  private buildShrouds(): void {
+    const geometry = this.track(new THREE.PlaneGeometry(TILE * 0.86, TILE * 0.86));
+    for (let row = 0; row < XIANGQI_ROWS; row += 1) {
+      for (let col = 0; col < XIANGQI_COLS; col += 1) {
+        const square = `${XIANGQI_FILES[col]}${row + 1}`;
+        const material = this.track(new THREE.MeshBasicMaterial({ color: 0x080604, transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide }));
         const mesh = new THREE.Mesh(geometry, material);
         mesh.rotation.x = -Math.PI / 2;
-        mesh.position.copy(squareToWorld(square, BOARD_TOP + 0.004));
+        mesh.position.copy(squareToWorld(square, BOARD_TOP + 0.022));
         mesh.visible = false;
-        mesh.renderOrder = 1;
+        mesh.renderOrder = 4;
         this.group.add(mesh);
-        this.shrouds.set(square, { mesh, material, target: 0, current: 0, delay: 0 });
+        this.shrouds.set(square, { mesh, current: 0, target: 0, delay: 0 });
       }
     }
   }
 
-  /**
-   * Veils every square except `reachable`. Pass `null` to lift the veil.
-   * `origin` staggers the fade so the shadow closes in from the chosen piece.
-   */
-  setShroud(reachable: Iterable<SquareId> | null, origin?: SquareId): void {
-    if (!reachable) {
-      for (const slot of this.shrouds.values()) {
-        slot.target = 0;
-        slot.delay = 0;
-      }
-      return;
-    }
-    const lit = new Set<SquareId>(reachable);
-    const originPosition = origin ? squareToWorld(origin) : null;
-    for (const [square, slot] of this.shrouds) {
-      const clear = lit.has(square);
-      slot.target = clear ? 0 : SHROUD_OPACITY;
-      slot.delay =
-        clear || !originPosition
-          ? 0
-          : Math.min((squareToWorld(square).distanceTo(originPosition) / TILE) * 0.016, 0.12);
-    }
-  }
-
-  private updateShroud(delta: number): void {
-    for (const slot of this.shrouds.values()) {
-      if (slot.delay > 0) {
-        slot.delay -= delta;
-        if (slot.delay > 0) continue;
-      }
-      if (Math.abs(slot.target - slot.current) < 0.002) {
-        if (slot.current !== slot.target) {
-          slot.current = slot.target;
-          slot.material.opacity = slot.current;
-          slot.mesh.visible = slot.current > 0.004;
-        }
-        continue;
-      }
-      // Closes in a touch slower than it lifts, so releasing feels snappy.
-      const speed = slot.target > slot.current ? 8 : 13;
-      slot.current += (slot.target - slot.current) * Math.min(1, delta * speed);
-      slot.material.opacity = slot.current;
-      slot.mesh.visible = slot.current > 0.004;
-    }
-  }
-
-  /** Pool of reusable shockwave rings + flares for capture impacts. */
-  private buildImpactWaves(): void {
-    const ringGeometry = this.track(new THREE.PlaneGeometry(TILE * 2.4, TILE * 2.4));
-    const flareGeometry = this.track(new THREE.PlaneGeometry(TILE * 1.5, TILE * 1.5));
-    const ringMap = this.track(shockwaveTexture());
-    const flareMap = this.track(radialTexture("rgba(255,255,255,1)", "rgba(255,255,255,0)"));
-
-    for (let i = 0; i < 4; i += 1) {
-      const ringMaterial = this.track(
-        new THREE.MeshBasicMaterial({
-          map: ringMap,
-          transparent: true,
-          opacity: 0,
-          depthWrite: false,
-          blending: THREE.AdditiveBlending,
-        }),
-      );
-      const ring = new THREE.Mesh(ringGeometry, ringMaterial);
-      ring.rotation.x = -Math.PI / 2;
-      ring.visible = false;
-      ring.renderOrder = 6;
-      this.group.add(ring);
-
-      const flareMaterial = this.track(
-        new THREE.MeshBasicMaterial({
-          map: flareMap,
-          transparent: true,
-          opacity: 0,
-          depthWrite: false,
-          blending: THREE.AdditiveBlending,
-        }),
-      );
-      const flare = new THREE.Mesh(flareGeometry, flareMaterial);
-      flare.rotation.x = -Math.PI / 2;
-      flare.visible = false;
-      flare.renderOrder = 7;
-      this.group.add(flare);
-
-      this.waves.push({ ring, ringMaterial, flare, flareMaterial, age: 0, duration: 0.5, active: false });
-    }
-  }
-
-  /** Pool of reusable arrival ripples: a dust ring plus a soft ground glow. */
-  private buildLandingRipples(): void {
-    const ringGeometry = this.track(new THREE.PlaneGeometry(TILE * 2.1, TILE * 2.1));
-    const glowGeometry = this.track(new THREE.PlaneGeometry(TILE * 1.35, TILE * 1.35));
-    const ringMap = this.track(landingRingTexture());
-    const glowMap = this.track(radialTexture("rgba(255,255,255,0.9)", "rgba(255,255,255,0)"));
-
-    for (let i = 0; i < 5; i += 1) {
-      const ringMaterial = this.track(
-        new THREE.MeshBasicMaterial({
-          map: ringMap,
-          transparent: true,
-          opacity: 0,
-          depthWrite: false,
-          blending: THREE.AdditiveBlending,
-        }),
-      );
-      const ring = new THREE.Mesh(ringGeometry, ringMaterial);
-      ring.rotation.x = -Math.PI / 2;
-      ring.visible = false;
-      ring.renderOrder = 6;
-      this.group.add(ring);
-
-      const glowMaterial = this.track(
-        new THREE.MeshBasicMaterial({
-          map: glowMap,
-          transparent: true,
-          opacity: 0,
-          depthWrite: false,
-          blending: THREE.AdditiveBlending,
-        }),
-      );
-      const glow = new THREE.Mesh(glowGeometry, glowMaterial);
-      glow.rotation.x = -Math.PI / 2;
-      glow.visible = false;
-      glow.renderOrder = 5;
-      this.group.add(glow);
-
-      this.landings.push({
-        ring,
-        ringMaterial,
-        glow,
-        glowMaterial,
-        age: 0,
-        duration: 0.7,
-        strength: 1,
-        active: false,
-      });
-    }
-  }
-
-  /**
-   * Arrival on a square: a dust ring rolls outward from under the figure's feet
-   * over a short bloom of faction light, and the tile takes a small dip. Softer
-   * and slower than {@link impact} — this is weight settling, not a blow.
-   */
-  land(square: SquareId, color = 0xffd6a0, strength = 1): void {
-    const centre = squareToWorld(square, BOARD_TOP + 0.018);
-
-    const ripple = this.landings[this.landingCursor % this.landings.length];
-    this.landingCursor += 1;
-    ripple.age = 0;
-    ripple.duration = 0.62 + strength * 0.16;
-    ripple.strength = strength;
-    ripple.active = true;
-    ripple.ring.position.copy(centre);
-    ripple.ring.rotation.z = Math.random() * Math.PI * 2;
-    ripple.ring.scale.setScalar(0.2);
-    ripple.ring.visible = true;
-    ripple.ringMaterial.color.setHex(color);
-    ripple.glow.position.copy(centre).setY(BOARD_TOP + 0.014);
-    ripple.glow.scale.setScalar(0.6);
-    ripple.glow.visible = true;
-    ripple.glowMaterial.color.setHex(color);
-
-    this.joltTiles(square, strength * 0.42, 1.4);
-  }
-
-  /**
-   * Capture impact on a square: a white-hot flash that decays into a coloured
-   * shockwave ring, while the struck tile and its neighbours are jolted out of
-   * the board and bounce back into place.
-   */
-  impact(square: SquareId, color = 0xff6a3c, strength = 1): void {
-    const centre = squareToWorld(square, BOARD_TOP + 0.02);
-
-    const wave = this.waves[this.waveCursor % this.waves.length];
-    this.waveCursor += 1;
-    wave.age = 0;
-    wave.duration = 0.6;
-    wave.active = true;
-    wave.ring.position.copy(centre);
-    wave.ring.rotation.z = Math.random() * Math.PI;
-    wave.ring.visible = true;
-    wave.ringMaterial.color.setHex(color);
-    wave.flare.position.copy(centre).setY(BOARD_TOP + 0.03);
-    wave.flare.visible = true;
-    wave.flareMaterial.color.setHex(0xfff3d2);
-
-    this.joltTiles(square, strength, 2.2);
-  }
-
-  /** Shock spreads outward: neighbours kick later and weaker than the centre. */
-  private joltTiles(square: SquareId, strength: number, reach: number): void {
-    if (strength <= 0) return;
-    const origin = squareToWorld(square);
-    for (const [target, tile] of this.tileBySquare) {
-      const distance = squareToWorld(target).distanceTo(origin) / TILE;
-      if (distance > reach) continue;
-      const falloff = Math.max(0, 1 - distance / (reach + 0.2));
-      const amount = strength * falloff * falloff;
-      if (amount < 0.04) continue;
-      this.jolts = this.jolts.filter((entry) => entry.tile !== tile);
-      this.jolts.push({
-        tile,
-        home: (tile.userData.home as THREE.Vector3).clone(),
-        age: -distance * 0.035,
-        strength: amount,
-        duration: 0.5 + distance * 0.06,
-        seed: Math.random() * Math.PI * 2,
-      });
-    }
-  }
-
-  private updateImpacts(delta: number): void {
-    for (let i = this.jolts.length - 1; i >= 0; i -= 1) {
-      const jolt = this.jolts[i];
-      jolt.age += delta;
-      if (jolt.age < 0) continue;
-      const t = jolt.age / jolt.duration;
-      if (t >= 1) {
-        jolt.tile.position.copy(jolt.home);
-        jolt.tile.rotation.set(0, 0, 0);
-        this.jolts.splice(i, 1);
-        continue;
-      }
-      // Damped oscillation: punched down first, then settling.
-      const decay = Math.exp(-t * 6.5) * (1 - t);
-      const swing = Math.sin(jolt.age * 34 + jolt.seed) * decay * jolt.strength;
-      jolt.tile.position.set(
-        jolt.home.x + Math.sin(jolt.age * 41 + jolt.seed) * decay * jolt.strength * 0.035,
-        jolt.home.y - swing * 0.13,
-        jolt.home.z + Math.cos(jolt.age * 38 + jolt.seed) * decay * jolt.strength * 0.035,
-      );
-      jolt.tile.rotation.set(swing * 0.05, 0, Math.cos(jolt.age * 30 + jolt.seed) * decay * jolt.strength * 0.05);
-    }
-
-    for (const wave of this.waves) {
-      if (!wave.active) continue;
-      wave.age += delta;
-      const t = wave.age / wave.duration;
-      if (t >= 1) {
-        wave.active = false;
-        wave.ring.visible = false;
-        wave.flare.visible = false;
-        wave.ringMaterial.opacity = 0;
-        wave.flareMaterial.opacity = 0;
-        continue;
-      }
-      const eased = 1 - Math.pow(1 - t, 2.6);
-      wave.ring.scale.setScalar(0.25 + eased * 1.35);
-      wave.ringMaterial.opacity = Math.pow(1 - t, 1.7) * 0.95;
-      wave.ring.rotation.z += delta * 0.6;
-
-      // The flare is a two-frame blowout: peaks instantly, gone in ~0.18s.
-      const flareT = Math.min(1, wave.age / 0.18);
-      wave.flare.scale.setScalar(0.5 + flareT * 1.1);
-      wave.flareMaterial.opacity = Math.pow(1 - flareT, 2) * 1.1;
-      wave.flare.visible = flareT < 1;
-    }
-
-    for (const ripple of this.landings) {
-      if (!ripple.active) continue;
-      ripple.age += delta;
-      const t = ripple.age / ripple.duration;
-      if (t >= 1) {
-        ripple.active = false;
-        ripple.ring.visible = false;
-        ripple.glow.visible = false;
-        ripple.ringMaterial.opacity = 0;
-        ripple.glowMaterial.opacity = 0;
-        continue;
-      }
-      // The dust rolls out fast then coasts; the light under it dies quicker.
-      const eased = 1 - Math.pow(1 - t, 3);
-      ripple.ring.scale.setScalar(0.2 + eased * (0.85 + ripple.strength * 0.5));
-      ripple.ringMaterial.opacity = Math.sin(Math.PI * Math.pow(t, 0.55)) * 0.55 * ripple.strength;
-      ripple.ring.rotation.z += delta * 0.35;
-
-      const glowT = Math.min(1, ripple.age / (ripple.duration * 0.45));
-      ripple.glow.scale.setScalar(0.6 + glowT * 0.75);
-      ripple.glowMaterial.opacity = Math.pow(1 - glowT, 2.1) * 0.5 * ripple.strength;
-      ripple.glow.visible = glowT < 1;
-    }
-  }
-
-  clearHighlights(kinds?: HighlightKind[]): void {
-    if (!kinds) this.setShroud(null);
-    for (const slot of this.slots.values()) {
-      if (kinds && slot.kind && !kinds.includes(slot.kind)) continue;
-      slot.kind = null;
-      slot.pulse = false;
-      slot.age = 0;
-      slot.glow.visible = false;
-      slot.marker.visible = false;
-      slot.beam.visible = false;
-      slot.glowMaterial.opacity = 0;
-      slot.markerMaterial.opacity = 0;
-      slot.beamMaterial.opacity = 0;
-    }
-  }
-
-  /**
-   * Lights a square up. `delay` staggers the pop-in so a fan of legal moves
-   * ripples outward from the selected piece instead of appearing all at once.
-   */
   setHighlight(square: SquareId, kind: HighlightKind, pulse = false, delay = 0): void {
-    const slot = this.slots.get(square);
+    const slot = this.highlightSlots.get(square);
     if (!slot) return;
-    const restart = slot.kind !== kind;
     slot.kind = kind;
+    slot.age = 0;
+    slot.delay = delay;
     slot.pulse = pulse;
-    if (restart) slot.age = -delay;
-
     const color = HIGHLIGHT_COLORS[kind];
-    slot.glowMaterial.color.setHex(color);
-    slot.markerMaterial.color.setHex(color);
-    slot.beamMaterial.color.setHex(color);
+    slot.ring.material.color.setHex(color);
+    slot.glow.material.color.setHex(color);
+    slot.beam.material.color.setHex(color);
+    slot.ring.visible = true;
+    slot.glow.visible = true;
+    slot.beam.visible = kind !== "last";
+  }
 
-    const markerMap = this.markerMaps[kind];
-    slot.markerMaterial.map = markerMap;
-    slot.markerMaterial.needsUpdate = true;
-    slot.marker.rotation.z = 0;
-
-    const visible = slot.age >= 0;
-    slot.glow.visible = visible;
-    slot.marker.visible = visible && markerMap !== null;
-    slot.beam.visible = visible && BEAM_OPACITY[kind] > 0;
+  clearHighlights(): void {
+    for (const slot of this.highlightSlots.values()) {
+      slot.kind = null;
+      slot.ring.visible = false;
+      slot.glow.visible = false;
+      slot.beam.visible = false;
+      slot.ring.material.opacity = 0;
+      slot.glow.material.opacity = 0;
+      slot.beam.material.opacity = 0;
+    }
   }
 
   setHover(square: SquareId | null): void {
-    const material = this.hoverRing.material as THREE.MeshBasicMaterial;
     if (!square) {
-      material.opacity = 0;
+      this.hoverRing.visible = false;
+      this.hoverRing.material.opacity = 0;
       return;
     }
-    this.hoverRing.position.copy(squareToWorld(square, BOARD_TOP + 0.014));
-    material.opacity = 0.5;
+    this.hoverRing.position.copy(squareToWorld(square, BOARD_TOP + 0.052));
+    this.hoverRing.visible = true;
+  }
+
+  setShroud(allowed: SquareId[] | null, origin?: SquareId): void {
+    const allowedSet = allowed ? new Set(allowed) : null;
+    const originPoint = origin ? squareToWorld(origin) : null;
+    for (const [square, slot] of this.shrouds) {
+      slot.target = allowedSet && !allowedSet.has(square) ? 0.58 : 0;
+      slot.delay = originPoint ? Math.min(0.16, squareToWorld(square).distanceTo(originPoint) * 0.018) : 0;
+      if (slot.target > 0) slot.mesh.visible = true;
+    }
+  }
+
+  impact(square: SquareId, color: number, strength: number): void {
+    this.jolt(square, strength, 0.62);
+    this.spawnTransient(square, color, Math.min(1.8, strength * 1.15), 0.52);
+  }
+
+  land(square: SquareId, color: number, strength: number): void {
+    this.jolt(square, strength * 0.45, 0.4);
+    this.spawnTransient(square, color, Math.min(1.4, strength), 0.42);
+  }
+
+  private jolt(square: SquareId, strength: number, duration: number): void {
+    const mesh = this.tileBySquare.get(square);
+    if (!mesh) return;
+    const existing = this.motions.find((motion) => motion.mesh === mesh);
+    if (existing) {
+      existing.age = 0;
+      existing.strength = Math.max(existing.strength, strength);
+      return;
+    }
+    this.motions.push({ mesh, home: (mesh.userData.home as THREE.Vector3).clone(), age: 0, duration, strength, phase: Math.random() * Math.PI * 2 });
+  }
+
+  private spawnTransient(square: SquareId, color: number, strength: number, duration: number): void {
+    const material = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+    const mesh = new THREE.Mesh(new THREE.RingGeometry(TILE * 0.14, TILE * 0.22, 48), material);
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.copy(squareToWorld(square, BOARD_TOP + 0.06));
+    mesh.renderOrder = 9;
+    this.group.add(mesh);
+    this.transients.push({ mesh, age: 0, duration, strength });
   }
 
   update(delta: number): void {
     this.elapsed += delta;
-    this.updateImpacts(delta);
-    this.updateShroud(delta);
-    for (const slot of this.slots.values()) {
-      const kind = slot.kind;
-      if (!kind) continue;
-
+    for (const slot of this.highlightSlots.values()) {
+      if (!slot.kind) continue;
       slot.age += delta;
-      if (slot.age < 0) {
-        slot.glow.visible = false;
-        slot.marker.visible = false;
-        slot.beam.visible = false;
+      if (slot.age < slot.delay) continue;
+      const t = Math.min(1, (slot.age - slot.delay) / 0.24);
+      const pulse = slot.pulse ? 0.78 + Math.sin(this.elapsed * 4.2) * 0.22 : 1;
+      const base = slot.kind === "last" ? 0.3 : slot.kind === "capture" || slot.kind === "check" ? 0.92 : 0.72;
+      slot.ring.material.opacity = base * t * pulse;
+      slot.glow.material.opacity = base * 0.28 * t * pulse;
+      slot.beam.material.opacity = slot.kind === "last" ? 0 : base * 0.14 * t * pulse;
+      slot.ring.rotation.z += delta * (slot.kind === "capture" ? -0.7 : 0.35);
+      const scale = 0.82 + t * 0.18 + (slot.pulse ? Math.sin(this.elapsed * 3.6) * 0.035 : 0);
+      slot.ring.scale.setScalar(scale);
+      slot.glow.scale.setScalar(scale);
+    }
+    if (this.hoverRing.visible) {
+      this.hoverRing.material.opacity = 0.35 + Math.sin(this.elapsed * 5) * 0.12;
+      this.hoverRing.rotation.z += delta * 0.45;
+    }
+    for (const slot of this.shrouds.values()) {
+      if (slot.delay > 0) {
+        slot.delay = Math.max(0, slot.delay - delta);
         continue;
       }
-
-      const hasMarker = this.markerMaps[kind] !== null;
-      const hasBeam = BEAM_OPACITY[kind] > 0;
-      slot.glow.visible = true;
-      slot.marker.visible = hasMarker;
-      slot.beam.visible = hasBeam;
-
-      // Pop-in: overshoot the scale, then breathe.
-      const t = Math.min(slot.age / POP_DURATION, 1);
-      const pop = easeOutBack(t);
-      const wave = (Math.sin(this.elapsed * (slot.pulse ? 5.6 : 3.4) + slot.phase) + 1) * 0.5;
-      const breath = slot.pulse ? 0.45 + wave * 0.85 : 0.8 + wave * 0.25;
-      const fade = t;
-
-      slot.glowMaterial.opacity = GLOW_OPACITY[kind] * breath * fade;
-      slot.glow.scale.setScalar(0.55 + pop * 0.45);
-
-      if (hasMarker) {
-        slot.markerMaterial.opacity = MARKER_OPACITY[kind] * (0.72 + breath * 0.34) * fade;
-        slot.marker.scale.setScalar(0.35 + pop * 0.65 + (slot.pulse ? wave * 0.05 : wave * 0.02));
-        slot.marker.rotation.z += delta * MARKER_SPIN[kind];
+      slot.current += (slot.target - slot.current) * (1 - Math.exp(-delta * 10));
+      slot.mesh.material.opacity = slot.current;
+      slot.mesh.visible = slot.current > 0.01;
+    }
+    for (let index = this.motions.length - 1; index >= 0; index -= 1) {
+      const motion = this.motions[index];
+      motion.age += delta;
+      const t = Math.min(1, motion.age / motion.duration);
+      const envelope = 1 - t;
+      motion.mesh.position.copy(motion.home);
+      motion.mesh.position.y += Math.sin(t * Math.PI * 5 + motion.phase) * 0.075 * motion.strength * envelope;
+      motion.mesh.rotation.x = Math.sin(t * Math.PI * 4 + motion.phase) * 0.018 * motion.strength * envelope;
+      motion.mesh.rotation.z = Math.cos(t * Math.PI * 4 + motion.phase) * 0.018 * motion.strength * envelope;
+      if (t >= 1) {
+        motion.mesh.position.copy(motion.home);
+        motion.mesh.rotation.set(0, 0, 0);
+        this.motions.splice(index, 1);
       }
-
-      if (hasBeam) {
-        slot.beamMaterial.opacity = BEAM_OPACITY[kind] * breath * fade;
-        slot.beam.scale.set(1, 0.4 + pop * 0.6, 1);
-        slot.beam.position.y = BOARD_TOP + 0.275 * (0.4 + pop * 0.6);
+    }
+    for (let index = this.transients.length - 1; index >= 0; index -= 1) {
+      const transient = this.transients[index];
+      transient.age += delta;
+      const t = Math.min(1, transient.age / transient.duration);
+      transient.mesh.scale.setScalar(1 + t * (2.5 + transient.strength * 0.65));
+      transient.mesh.material.opacity = (1 - t) * 0.85;
+      if (t >= 1) {
+        this.group.remove(transient.mesh);
+        transient.mesh.geometry.dispose();
+        transient.mesh.material.dispose();
+        this.transients.splice(index, 1);
       }
     }
   }
 
-  /**
-   * Retunes the playing surface for an arena theme. The dark squares carry the
-   * most weight here: near-black basalt swallows the obsidian army under low
-   * light, so daylight themes lift them to a readable slate.
-   */
   applyArena(look: ArenaLook): void {
-    this.lightTileMaterial.color.setHex(look.board.light);
-    this.darkTileMaterial.color.setHex(look.board.dark);
-    this.baseMaterial?.color.setHex(look.board.base);
-    this.borderMaterial?.color.setHex(look.board.border);
-    this.trimMaterial?.color.setHex(look.board.trim);
+    this.lightTileMaterial.color.setHex(look.board.light).lerp(new THREE.Color(0xd8c6a0), 0.24);
+    this.darkTileMaterial.color.setHex(look.board.dark).lerp(new THREE.Color(0x4b3b2d), 0.18);
+    this.baseMaterial.color.setHex(look.board.base);
+    this.borderMaterial.color.setHex(look.board.border);
+    this.trimMaterial.color.setHex(look.board.trim);
+    this.gridMaterial.color.setHex(look.board.trim).multiplyScalar(0.42);
   }
 
   dispose(): void {
-    for (const item of this.disposables) item.dispose();
+    for (const transient of this.transients) {
+      transient.mesh.geometry.dispose();
+      transient.mesh.material.dispose();
+    }
+    this.transients = [];
+    for (const disposable of this.disposables) disposable.dispose();
     this.disposables = [];
-    this.slots.clear();
-    this.shrouds.clear();
     this.group.clear();
+    this.tiles.length = 0;
+    this.highlightSlots.clear();
+    this.shrouds.clear();
+    this.tileBySquare.clear();
   }
 }
