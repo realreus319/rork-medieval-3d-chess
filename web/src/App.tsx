@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { XiangqiAiClient } from "./xiangqi/aiClient";
 import {
+  PIECE_LABELS,
   cloneState,
   createInitialState,
   legalMovesForPiece,
@@ -340,7 +341,7 @@ export default function App() {
           <div>
             {captured.length === 0 ? <em>{copy.none}</em> : captured.map((piece) => (
               <i key={piece.id} className={piece.color} title={copy.pieces[piece.color][piece.type]}>
-                {copy.pieces[piece.color][piece.type]}
+                {PIECE_LABELS[piece.color][piece.type]}
               </i>
             ))}
           </div>
