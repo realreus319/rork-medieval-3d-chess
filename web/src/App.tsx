@@ -4,6 +4,7 @@ import {
   Camera,
   FlipVertical2,
   History,
+  Languages,
   RotateCcw,
   Swords,
   Undo2,
@@ -11,7 +12,6 @@ import {
 } from "lucide-react";
 import { XiangqiAiClient } from "./xiangqi/aiClient";
 import {
-  PIECE_LABELS,
   cloneState,
   createInitialState,
   legalMovesForPiece,
@@ -20,21 +20,36 @@ import {
   type Color,
   type GameState,
   type Move,
+  type PieceType,
   type Position,
 } from "./xiangqi/core";
+import {
+  UI_COPY,
+  readStoredLocale,
+  storeLocale,
+  type Locale,
+  type UiCopy,
+} from "./xiangqi/i18n";
 import { XiangqiScene } from "./xiangqi/scene";
 
 type Mode = "local" | "ai";
 type Difficulty = 1 | 2 | 3;
 
-function colorName(color: Color) {
-  return color === "red" ? "红方" : "黑方";
+interface LedgerEntry {
+  move: Move;
+  color: Color;
+  type: PieceType;
 }
 
-function moveText(state: GameState, move: Move): string {
-  const piece = state.pieces.find((item) => item.id === move.pieceId);
-  if (!piece) return "未知着法";
-  return `${colorName(piece.color)} ${PIECE_LABELS[piece.color][piece.type]} ${move.from.col + 1},${move.from.row + 1} → ${move.to.col + 1},${move.to.row + 1}`;
+const oppositeColor = (color: Color): Color => (color === "red" ? "black" : "red");
+
+function moveText(entry: LedgerEntry, copy: UiCopy): string {
+  const { move, color, type } = entry;
+  return `${copy.colorNames[color]} ${copy.pieces[color][type]} ${move.from.col + 1},${move.from.row + 1} → ${move.to.col + 1},${move.to.row + 1}`;
+}
+
+function updateMeta(selector: string, value: string): void {
+  document.querySelector<HTMLMetaElement>(selector)?.setAttribute("content", value);
 }
 
 export default function App() {
@@ -45,11 +60,16 @@ export default function App() {
   const handleCellRef = useRef<(position: Position) => void>(() => undefined);
   const [state, setState] = useState(stateRef.current);
   const [history, setHistory] = useState<GameState[]>([]);
-  const [ledger, setLedger] = useState<string[]>([]);
+  const [ledger, setLedger] = useState<LedgerEntry[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [mode, setMode] = useState<Mode>("ai");
+  const [humanColor, setHumanColor] = useState<Color>("red");
   const [difficulty, setDifficulty] = useState<Difficulty>(2);
   const [thinking, setThinking] = useState(false);
+  const [locale, setLocale] = useState<Locale>(readStoredLocale);
+
+  const copy = UI_COPY[locale];
+  const aiColor = oppositeColor(humanColor);
 
   const legalMoves = useMemo(
     () => (selected ? legalMovesForPiece(state, selected) : []),
@@ -60,8 +80,11 @@ export default function App() {
     const current = stateRef.current;
     const next = playMove(current, move);
     if (next === current) return false;
+    const actualMove = next.lastMove ?? move;
+    const piece = current.pieces.find((item) => item.id === actualMove.pieceId);
+    if (!piece) return false;
     setHistory((items) => [...items, cloneState(current)]);
-    setLedger((items) => [...items, moveText(current, next.lastMove ?? move)]);
+    setLedger((items) => [...items, { move: actualMove, color: piece.color, type: piece.type }]);
     stateRef.current = next;
     setState(next);
     setSelected(null);
@@ -71,7 +94,7 @@ export default function App() {
   const handleCell = useCallback(
     (position: Position) => {
       const current = stateRef.current;
-      if (thinking || current.winner || (mode === "ai" && current.turn === "black")) return;
+      if (thinking || current.winner || (mode === "ai" && current.turn === aiColor)) return;
       if (selected) {
         const move = legalMovesForPiece(current, selected).find(
           (candidate) => candidate.to.row === position.row && candidate.to.col === position.col,
@@ -81,7 +104,7 @@ export default function App() {
       const piece = pieceAt(current, position);
       setSelected(piece?.color === current.turn ? piece.id : null);
     },
-    [commitMove, mode, selected, thinking],
+    [aiColor, commitMove, mode, selected, thinking],
   );
 
   handleCellRef.current = handleCell;
@@ -102,12 +125,25 @@ export default function App() {
   }, [state, selected, legalMoves]);
 
   useEffect(() => {
+    sceneRef.current?.setPerspective(mode === "ai" ? humanColor : "red");
+  }, [humanColor, mode]);
+
+  useEffect(() => {
     aiRef.current = new XiangqiAiClient();
     return () => aiRef.current?.dispose();
   }, []);
 
   useEffect(() => {
-    if (mode !== "ai" || state.turn !== "black" || state.winner) return;
+    storeLocale(locale);
+    document.documentElement.lang = locale;
+    document.title = copy.documentTitle;
+    updateMeta('meta[name="description"]', copy.description);
+    updateMeta('meta[property="og:title"]', copy.documentTitle);
+    updateMeta('meta[property="og:description"]', copy.description);
+  }, [copy, locale]);
+
+  useEffect(() => {
+    if (mode !== "ai" || state.turn !== aiColor || state.winner) return;
     const client = aiRef.current;
     if (!client) return;
     let cancelled = false;
@@ -121,7 +157,7 @@ export default function App() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [commitMove, difficulty, mode, state]);
+  }, [aiColor, commitMove, difficulty, mode, state]);
 
   const reset = useCallback(() => {
     aiRef.current?.cancel();
@@ -139,7 +175,9 @@ export default function App() {
     setHistory((items) => {
       if (items.length === 0) return items;
       let targetIndex = items.length - 1;
-      if (mode === "ai" && stateRef.current.turn === "red" && items.length >= 2) targetIndex = items.length - 2;
+      if (mode === "ai" && stateRef.current.turn === humanColor && items.length >= 2) {
+        targetIndex = items.length - 2;
+      }
       const previous = cloneState(items[targetIndex]);
       stateRef.current = previous;
       setState(previous);
@@ -148,15 +186,32 @@ export default function App() {
       setThinking(false);
       return items.slice(0, targetIndex);
     });
-  }, [mode]);
+  }, [humanColor, mode]);
 
+  const changeMode = useCallback((nextMode: Mode) => {
+    if (nextMode === mode) return;
+    setMode(nextMode);
+    reset();
+  }, [mode, reset]);
+
+  const changeHumanColor = useCallback((color: Color) => {
+    if (color === humanColor) return;
+    setHumanColor(color);
+    reset();
+  }, [humanColor, reset]);
+
+  const toggleLocale = useCallback(() => {
+    setLocale((current) => (current === "zh-CN" ? "en-US" : "zh-CN"));
+  }, []);
+
+  const currentColorName = copy.colorNames[state.turn];
   const status = state.winner
-    ? `${colorName(state.winner)}胜`
+    ? copy.status.winner(copy.colorNames[state.winner])
     : thinking
-      ? "黑方正在推演"
+      ? copy.status.thinking(copy.colorNames[aiColor])
       : state.check
-        ? `${colorName(state.turn)}被将军`
-        : `${colorName(state.turn)}行棋`;
+        ? copy.status.checked(currentColorName)
+        : copy.status.turn(currentColorName);
 
   const captured = useMemo(() => {
     const ids = new Set(state.pieces.map((piece) => piece.id));
@@ -172,8 +227,8 @@ export default function App() {
         <div className="brand">
           <span className="brand-seal">楚</span>
           <div>
-            <strong>楚汉棋局</strong>
-            <span>3D XIANGQI</span>
+            <strong>{copy.brand}</strong>
+            <span>{copy.brandSubtitle}</span>
           </div>
         </div>
         <div className={`turn-indicator ${state.turn}`}>
@@ -181,16 +236,25 @@ export default function App() {
           <span>{status}</span>
         </div>
         <div className="toolbar">
-          <button onClick={undo} disabled={history.length === 0 || thinking} aria-label="悔棋" title="悔棋">
+          <button
+            className="language-toggle"
+            onClick={toggleLocale}
+            aria-label={copy.switchLanguage}
+            title={copy.switchLanguage}
+          >
+            <Languages size={17} />
+            <span>{locale === "zh-CN" ? "EN" : "中"}</span>
+          </button>
+          <button onClick={undo} disabled={history.length === 0 || thinking} aria-label={copy.toolbar.undo} title={copy.toolbar.undo}>
             <Undo2 size={18} />
           </button>
-          <button onClick={() => sceneRef.current?.flip()} aria-label="翻转棋盘" title="翻转棋盘">
+          <button onClick={() => sceneRef.current?.flip()} aria-label={copy.toolbar.flip} title={copy.toolbar.flip}>
             <FlipVertical2 size={18} />
           </button>
-          <button onClick={() => sceneRef.current?.overhead()} aria-label="俯视" title="俯视">
+          <button onClick={() => sceneRef.current?.overhead()} aria-label={copy.toolbar.overhead} title={copy.toolbar.overhead}>
             <Camera size={18} />
           </button>
-          <button onClick={reset} aria-label="重新开始" title="重新开始">
+          <button onClick={reset} aria-label={copy.toolbar.restart} title={copy.toolbar.restart}>
             <RotateCcw size={18} />
           </button>
         </div>
@@ -198,66 +262,90 @@ export default function App() {
 
       <aside className="control-panel glass-panel">
         <div className="panel-title">
-          <span>对局设置</span>
-          <small>第 {Math.ceil(state.moveNumber / 2)} 回合</small>
+          <span>{copy.settings}</span>
+          <small>{copy.round(Math.ceil(state.moveNumber / 2))}</small>
         </div>
         <div className="mode-switch">
-          <button className={mode === "ai" ? "active" : ""} onClick={() => { setMode("ai"); reset(); }}>
-            <Bot size={17} /> 人机对弈
+          <button className={mode === "ai" ? "active" : ""} onClick={() => changeMode("ai")}>
+            <Bot size={17} /> {copy.modes.ai}
           </button>
-          <button className={mode === "local" ? "active" : ""} onClick={() => { setMode("local"); reset(); }}>
-            <Users size={17} /> 双人对弈
+          <button className={mode === "local" ? "active" : ""} onClick={() => changeMode("local")}>
+            <Users size={17} /> {copy.modes.local}
           </button>
         </div>
         {mode === "ai" && (
-          <div className="difficulty">
-            <span>棋力</span>
-            <div>
-              {([1, 2, 3] as Difficulty[]).map((level) => (
-                <button key={level} className={difficulty === level ? "active" : ""} onClick={() => setDifficulty(level)}>
-                  {level === 1 ? "入门" : level === 2 ? "进阶" : "强攻"}
-                </button>
-              ))}
+          <>
+            <div className="side-choice">
+              <span>{copy.chooseSide}</span>
+              <div>
+                {(["red", "black"] as Color[]).map((color) => (
+                  <button
+                    key={color}
+                    className={`${color} ${humanColor === color ? "active" : ""}`}
+                    onClick={() => changeHumanColor(color)}
+                  >
+                    <b>{color === "red" ? "帅" : "将"}</b>
+                    <span>{copy.sides[color]}</span>
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+            <div className="difficulty">
+              <span>{copy.difficultyLabel}</span>
+              <div>
+                {([1, 2, 3] as Difficulty[]).map((level) => (
+                  <button key={level} className={difficulty === level ? "active" : ""} onClick={() => setDifficulty(level)}>
+                    {copy.difficulties[level]}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </>
         )}
         <div className="rule-note">
-          <strong>完整规则校验</strong>
-          <span>蹩马腿 · 塞象眼 · 炮架 · 九宫 · 将帅照面 · 自陷禁手</span>
+          <strong>{copy.rulesTitle}</strong>
+          <span>{copy.rulesSummary}</span>
         </div>
       </aside>
 
       <aside className="ledger glass-panel">
         <div className="panel-title">
-          <span><History size={16} /> 棋谱</span>
-          <small>{ledger.length} 手</small>
+          <span><History size={16} /> {copy.ledgerTitle}</span>
+          <small>{copy.movesCount(ledger.length)}</small>
         </div>
         <div className="move-list">
           {ledger.length === 0 ? (
-            <p>落子后自动记录棋谱</p>
+            <p>{copy.emptyLedger}</p>
           ) : (
-            ledger.map((entry, index) => <div key={`${entry}-${index}`}><b>{index + 1}</b><span>{entry}</span></div>)
+            ledger.map((entry, index) => (
+              <div key={`${entry.move.pieceId}-${index}`}>
+                <b>{index + 1}</b>
+                <span>{moveText(entry, copy)}</span>
+              </div>
+            ))
           )}
         </div>
         <div className="captured-tray">
-          <span>已吃棋子</span>
+          <span>{copy.capturedTitle}</span>
           <div>
-            {captured.length === 0 ? <em>暂无</em> : captured.map((piece) => (
-              <i key={piece.id} className={piece.color}>{PIECE_LABELS[piece.color][piece.type]}</i>
+            {captured.length === 0 ? <em>{copy.none}</em> : captured.map((piece) => (
+              <i key={piece.id} className={piece.color} title={copy.pieces[piece.color][piece.type]}>
+                {copy.pieces[piece.color][piece.type]}
+              </i>
             ))}
           </div>
         </div>
       </aside>
 
-      <footer className="hint">拖动旋转 · 滚轮缩放 · 点击棋子查看合法落点</footer>
+      <footer className="hint">{copy.hint}</footer>
 
       {state.winner && (
         <div className="game-over">
           <div className="glass-panel">
             <span className={`winner-seal ${state.winner}`}>{state.winner === "red" ? "帅" : "将"}</span>
-            <h1>{colorName(state.winner)}获胜</h1>
-            <p>残局已定，楚汉再开新局。</p>
-            <button onClick={reset}>再战一局</button>
+            <h1>{copy.victoryTitle(copy.colorNames[state.winner])}</h1>
+            <p>{copy.victoryDescription}</p>
+            <button onClick={reset}>{copy.rematch}</button>
           </div>
         </div>
       )}
