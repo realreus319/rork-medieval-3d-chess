@@ -1,7 +1,7 @@
 {
   "apps": [
     {
-      "name": "Medieval Chess",
+      "name": "楚汉棋局 3D 中国象棋",
       "path": "web",
       "framework": "web"
     }
