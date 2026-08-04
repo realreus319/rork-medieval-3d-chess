@@ -1,7 +1,12 @@
 import type { GameState, Move } from "./core";
 
+interface SearchResponse {
+  request: number;
+  move: Move | null;
+}
+
 interface PendingSearch {
-  handler: (event: MessageEvent<Move | null>) => void;
+  handler: (event: MessageEvent<SearchResponse>) => void;
   resolve: (move: Move | null) => void;
 }
 
@@ -21,15 +26,15 @@ export class XiangqiAiClient {
     this.cancel();
     const request = ++this.request;
     return new Promise((resolve) => {
-      const handler = (event: MessageEvent<Move | null>) => {
-        if (request !== this.request) return;
+      const handler = (event: MessageEvent<SearchResponse>) => {
+        if (event.data.request !== request || request !== this.request) return;
         this.worker?.removeEventListener("message", handler);
         this.pending = null;
-        resolve(event.data);
+        resolve(event.data.move);
       };
       this.pending = { handler, resolve };
       this.worker?.addEventListener("message", handler);
-      this.worker?.postMessage({ state, depth });
+      this.worker?.postMessage({ request, state, depth });
     });
   }
 
