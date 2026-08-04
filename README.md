@@ -22,7 +22,7 @@ cd web
 npm install
 npm run dev
 npm run build
-npx vitest run src/xiangqi/core.test.ts src/xiangqi/i18n.test.ts
+npx vitest run src/xiangqi/core.test.ts src/xiangqi/i18n.test.ts src/xiangqi/aiClient.test.ts
 ```
 
 要求 Node.js 20+。项目为纯静态站点，无需后端或环境变量。
@@ -37,6 +37,7 @@ web/src/xiangqi/
 ├── i18n.test.ts       默认语言与翻译完整性测试
 ├── ai.ts              估值、走法排序与 Alpha-Beta 搜索
 ├── aiClient.ts        主线程 AI 客户端
+├── aiClient.test.ts   AI 请求取消与过期响应测试
 ├── xiangqi.worker.ts  Web Worker 搜索入口
 └── scene.ts           Three.js 棋盘、棋子、交互与动画
 ```
