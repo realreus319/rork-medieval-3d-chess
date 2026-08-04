@@ -55,6 +55,7 @@ function updateMeta(selector: string, value: string): void {
 export default function App() {
   const sceneHost = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<XiangqiScene | null>(null);
+  const perspectiveRef = useRef<Color>("red");
   const aiRef = useRef<XiangqiAiClient | null>(null);
   const stateRef = useRef<GameState>(createInitialState());
   const handleCellRef = useRef<(position: Position) => void>(() => undefined);
@@ -125,7 +126,11 @@ export default function App() {
   }, [state, selected, legalMoves]);
 
   useEffect(() => {
-    sceneRef.current?.setPerspective(mode === "ai" ? humanColor : "red");
+    const targetPerspective = mode === "ai" ? humanColor : "red";
+    if (perspectiveRef.current !== targetPerspective) {
+      sceneRef.current?.flip();
+      perspectiveRef.current = targetPerspective;
+    }
   }, [humanColor, mode]);
 
   useEffect(() => {
@@ -204,6 +209,11 @@ export default function App() {
     setLocale((current) => (current === "zh-CN" ? "en-US" : "zh-CN"));
   }, []);
 
+  const flipBoard = useCallback(() => {
+    sceneRef.current?.flip();
+    perspectiveRef.current = oppositeColor(perspectiveRef.current);
+  }, []);
+
   const currentColorName = copy.colorNames[state.turn];
   const status = state.winner
     ? copy.status.winner(copy.colorNames[state.winner])
@@ -248,7 +258,7 @@ export default function App() {
           <button onClick={undo} disabled={history.length === 0 || thinking} aria-label={copy.toolbar.undo} title={copy.toolbar.undo}>
             <Undo2 size={18} />
           </button>
-          <button onClick={() => sceneRef.current?.flip()} aria-label={copy.toolbar.flip} title={copy.toolbar.flip}>
+          <button onClick={flipBoard} aria-label={copy.toolbar.flip} title={copy.toolbar.flip}>
             <FlipVertical2 size={18} />
           </button>
           <button onClick={() => sceneRef.current?.overhead()} aria-label={copy.toolbar.overhead} title={copy.toolbar.overhead}>
